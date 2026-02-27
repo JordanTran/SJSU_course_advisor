@@ -6,4 +6,4 @@ pip install -r requirements.txt
 set GOOGLE_API_KEY enviroment variable
 
 # 3. Run
-python server.py
+python main.py
