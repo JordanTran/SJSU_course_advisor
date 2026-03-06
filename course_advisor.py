@@ -8,32 +8,34 @@ from google.genai.types import GenerateContentConfig
 
 class CourseAdvisor:
     """An AI-powered academic advisor grounded in course syllabus documents."""
-
+    
     DEFAULT_SYSTEM_PROMPT = """\
-You are a helpful academic advisor. You have access to the official course
-syllabus documents provided in every user message. Use their content
-to answer the student's question accurately.
+    You are a helpful academic advisor. You have access to the official course
+    syllabus documents provided in every user message. Use their content
+    to answer the student's question accurately.
 
-Rules:
-- Base your answer only on the syllabus content provided.
-- If the syllabi don't cover the question, say so honestly.
-- Be concise, friendly, and clear.
-"""
+    Rules:
+    - Base your answer only on the syllabus content provided.
+    - If the syllabi don't cover the question, say so honestly.
+    - Be concise, friendly, and clear.
+    """
+
+    SYLLABUS_URLS = [
+    "https://sjsu.campusconcourse.com/view_syllabus?course_id=84918",
+    "https://sjsu.campusconcourse.com/view_syllabus?course_id=78869",
+    "https://sjsu.campusconcourse.com/view_syllabus?course_id=37772",
+    # add more URLs as needed...
+    ]
 
     def __init__(
         self,
-        syllabus_urls: list[str],
         model: str = "gemini-2.5-flash",
         temperature: float = 0.2,
     ) -> None:
-        """
-        Args:
-            syllabus_urls: One or more URLs pointing to course syllabi (PDF or HTML).
-        """
-        self.syllabus_urls = syllabus_urls
         self.model = model
         self.temperature = temperature
         self.system_prompt = self.DEFAULT_SYSTEM_PROMPT
+        self.syllabus_urls = self.SYLLABUS_URLS
         self._client = genai.Client(api_key=self._resolve_api_key())
         self._uploaded_files: list | None = None
 
@@ -51,31 +53,6 @@ Rules:
         )
         parts = response.candidates[0].content.parts
         return "".join(p.text for p in parts if hasattr(p, "text") and p.text).strip()
-
-    def chat(self) -> None:
-        """Start an interactive command-line session."""
-        print("\n📚 Course Advisor  (type 'quit' to exit)")
-        print("─" * 45)
-
-        while True:
-            try:
-                user_input = input("You: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nGoodbye!")
-                break
-
-            if not user_input:
-                continue
-            if user_input.lower() in {"quit", "exit", "q"}:
-                print("Goodbye!")
-                break
-
-            print("Course Advisor: ", end="", flush=True)
-            try:
-                print(self.ask(user_input))
-            except Exception as e:
-                print(f"[Error] {e}")
-            print()
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
