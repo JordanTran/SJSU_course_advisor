@@ -3,10 +3,10 @@
 pip install -r requirements.txt
 
 # 2. Configure
-set GOOGLE_API_KEY enviroment variable
+Set your DB_PASSWORD and GOOGLE_API_KEY in .env file
 
 # 3. Run Server
-uvicorn course_advisor_api:app --reload --port 8000
+uvicorn course_advisor_api:app --reload --env-file .env
 
 # 4. Open Browser
 open http://localhost:8000 in your browser
