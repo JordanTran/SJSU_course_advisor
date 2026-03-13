@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import os
 
 from course_advisor import CourseAdvisor
 
@@ -10,8 +11,6 @@ from course_advisor import CourseAdvisor
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Course Advisor API", version="1.0.0")
-
-app.mount("/static", StaticFiles(directory="."), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,6 +59,20 @@ def health():
     return {"status": "ok"}
 
 
+# ── Frontend (Vite build) ─────────────────────────────────────────────────────
+
+FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+
+# Serve compiled JS/CSS assets
+app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+
+
 @app.get("/")
 def root():
-    return FileResponse("course_advisor_ui.html")
+    return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
+
+# Catch-all: serve index.html for client-side SPA routing
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str):
+    return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))

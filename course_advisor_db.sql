@@ -1,9 +1,3 @@
--- Create database
--- CREATE DATABASE course_advisor;
-
--- Connect to the database before running the rest:
--- \c course_advisor
-
 -- ── Tables ────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS section (
