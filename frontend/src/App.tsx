@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { GraduationCap, Send, Sparkles, AlertTriangle } from "lucide-react";
 
 const DEPTS = ["CMPE"];
+const API_URL = "http://localhost:8000/ask";
 
 function Bubble({ role, children }) {
   const isAssistant = role === "assistant";
@@ -77,7 +78,7 @@ export default function SJSUAdvisorChatMVP() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
