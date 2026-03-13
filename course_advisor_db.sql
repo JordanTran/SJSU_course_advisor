@@ -1,4 +1,4 @@
--- Create database (run separately as a superuser if needed)
+-- Create database
 -- CREATE DATABASE course_advisor;
 
 -- Connect to the database before running the rest:

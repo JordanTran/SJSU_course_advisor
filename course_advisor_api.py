@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,24 +16,25 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],   # tighten in production
-    allow_methods=["POST"],
+    allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
-# Lazy-initialise the advisor so syllabi are only fetched on first request
-_advisor: CourseAdvisor | None = None
+# Cache advisors per course name to avoid re-uploading syllabi on every request
+_advisors: dict[str, CourseAdvisor] = {}
 
-def get_advisor() -> CourseAdvisor:
-    global _advisor
-    if _advisor is None:
-        _advisor = CourseAdvisor()
-    return _advisor
+
+def get_advisor(course_name: str) -> CourseAdvisor:
+    if course_name not in _advisors:
+        _advisors[course_name] = CourseAdvisor(course_name=course_name)
+    return _advisors[course_name]
 
 
 # ── Request / response schemas ────────────────────────────────────────────────
 
 class QuestionRequest(BaseModel):
     question: str
+    course_name: str
 
 
 class AnswerResponse(BaseModel):
@@ -44,8 +45,12 @@ class AnswerResponse(BaseModel):
 
 @app.post("/ask", response_model=AnswerResponse)
 def ask(payload: QuestionRequest) -> AnswerResponse:
-    """Ask the course advisor a question grounded in the loaded syllabi."""
-    advisor = get_advisor()
+    """Ask the course advisor a question grounded in the syllabi for a given course."""
+    try:
+        advisor = get_advisor(payload.course_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
     answer = advisor.ask(payload.question)
     return AnswerResponse(answer=answer)
 
