@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,11 +7,17 @@ import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { GraduationCap, Send, Sparkles, AlertTriangle } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 
-const DEPTS = ["CMPE"];
-const API_URL = "http://localhost:8000/ask";
+const DEPTS = ["CMPE", "ISE"];
+const API_URL = "/ask";
 
-function Bubble({ role, children }) {
+interface BubbleProps {
+  role: string;
+  content: string;
+}
+
+function Bubble({ role, content }: BubbleProps) {
   const isAssistant = role === "assistant";
 
   return (
@@ -24,13 +30,27 @@ function Bubble({ role, children }) {
             : "bg-primary text-primary-foreground",
         ].join(" ")}
       >
-        {children}
+        {isAssistant ? (
+          <ReactMarkdown
+            components={{
+              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+              ul: ({ children }) => <ul className="mb-2 ml-4 list-disc space-y-1">{children}</ul>,
+              ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal space-y-1">{children}</ol>,
+              li: ({ children }) => <li>{children}</li>,
+              strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+            }}
+          >
+            {content}
+          </ReactMarkdown>
+        ) : (
+          content
+        )}
       </div>
     </div>
   );
 }
 
-function normalizeCourseNumber(v) {
+function normalizeCourseNumber(v: string): string {
   return (v || "")
     .toUpperCase()
     .replace(/\s+/g, "")
@@ -56,12 +76,12 @@ export default function SJSUAdvisorChatMVP() {
     {
       role: "assistant",
       content:
-        "Hi! I’m the SJSU Curriculum Advisor. Please select a department and enter a course number (e.g., CMPE 180B) to begin.",
+        "Hi! I'm the SJSU Curriculum Advisor. Please select a department and enter a course number (e.g., CMPE 180B) to begin.",
     },
   ]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
-  const scrollRef = useRef(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -69,7 +89,7 @@ export default function SJSUAdvisorChatMVP() {
     el.scrollTop = el.scrollHeight;
   }, [messages.length, loading]);
 
-  async function send(text) {
+  async function send(text?: string) {
     const userText = (text ?? draft).trim();
     if (!userText || loading || !chatEnabled) return;
 
@@ -78,7 +98,7 @@ export default function SJSUAdvisorChatMVP() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/api/chat`, {
+      const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -88,7 +108,7 @@ export default function SJSUAdvisorChatMVP() {
       });
 
       const data = await res.json();
-      setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: data.answer }]);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -106,7 +126,7 @@ export default function SJSUAdvisorChatMVP() {
       ...prev,
       {
         role: "assistant",
-        content: `Got it — we’ll focus on ${courseCode}. What would you like to know?`,
+        content: `Got it — we'll focus on ${courseCode}. What would you like to know?`,
       },
     ]);
   }
@@ -139,7 +159,7 @@ export default function SJSUAdvisorChatMVP() {
 
                   <div className="space-y-2">
                     <Label>Department</Label>
-                    <Select value={dept} onValueChange={setDept} disabled={courseLocked}>
+                    <Select value={dept} onValueChange={(v) => setDept(v ?? "")} disabled={courseLocked}>
                       <SelectTrigger className="h-10 rounded-xl px-3">
                         <SelectValue placeholder="Select dept" />
                       </SelectTrigger>
@@ -212,11 +232,9 @@ export default function SJSUAdvisorChatMVP() {
                   <ScrollArea className="h-[380px] rounded-2xl md:h-[420px]">
                     <div ref={scrollRef} className="space-y-3 px-4 py-4">
                       {messages.map((m, i) => (
-                        <Bubble key={i} role={m.role}>
-                          {m.content}
-                        </Bubble>
+                        <Bubble key={i} role={m.role} content={m.content} />
                       ))}
-                      {loading && <Bubble role="assistant">Thinking…</Bubble>}
+                      {loading && <Bubble role="assistant" content="Thinking…" />}
                     </div>
                   </ScrollArea>
                 </div>
