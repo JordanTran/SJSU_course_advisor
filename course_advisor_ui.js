@@ -3,11 +3,7 @@ const DEFAULT_COURSE = 'ISE 201';
 
 const chat = document.getElementById('chat');
 const input = document.getElementById('question');
-const courseInput = document.getElementById('course-name');
 const sendBtn = document.getElementById('send-btn');
-
-// Set default course name
-if (courseInput) courseInput.value = DEFAULT_COURSE;
 
 input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
 sendBtn.addEventListener('click', send);
@@ -16,16 +12,15 @@ async function send() {
   const question = input.value.trim();
   if (!question) return;
 
-  const courseName = (courseInput ? courseInput.value.trim() : DEFAULT_COURSE) || DEFAULT_COURSE;
   input.value = '';
 
-  chat.innerHTML += `<div class="user"><b>You (${courseName}):</b> ${question}</div>`;
+  chat.innerHTML += `<div class="user"><b>You:</b> ${question}</div>`;
 
   try {
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, course_name: courseName })
+      body: JSON.stringify({ question, course_name: DEFAULT_COURSE })
     });
 
     if (!res.ok) {
