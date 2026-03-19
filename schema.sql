@@ -1,40 +1,35 @@
-CREATE TABLE Faculty (
-    faculty_id SERIAL PRIMARY KEY,
+-- Instructor (renamed from Faculty)
+CREATE TABLE Instructor (
+    instructor_id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL
 );
 
-
+-- Department (kept for future use)
 CREATE TABLE Department (
     department_id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     college VARCHAR(100)
 );
 
-
+-- Course
 CREATE TABLE Course (
-    course_id VARCHAR(20) PRIMARY KEY,
-    course_name VARCHAR(255) NOT NULL,
+    course_id SERIAL PRIMARY KEY,
+    course_code VARCHAR(20) UNIQUE,
+    course_title VARCHAR(255),
     subject VARCHAR(20),
     catalog_number VARCHAR(20),
-    description TEXT,
-    prerequisites TEXT,
-    grading_basis VARCHAR(50),
-    units NUMERIC,
     department_id INTEGER REFERENCES Department(department_id)
 );
 
-
+-- Syllabus (main scraped data)
 CREATE TABLE Syllabus (
     syllabus_id SERIAL PRIMARY KEY,
-    course_id VARCHAR(20) REFERENCES Course(course_id),
-    faculty_id INTEGER REFERENCES Faculty(faculty_id),
-    term VARCHAR(20),
+    course_id INTEGER REFERENCES Course(course_id),
+    instructor_id INTEGER REFERENCES Instructor(instructor_id),
+    
+    session VARCHAR(20), 
     year INTEGER,
     section VARCHAR(10),
-    delivery VARCHAR(50),
-    start_date DATE,
-    end_date DATE,
-    modified_date DATE,
-    source_url TEXT,
-    raw_text TEXT
+    
+    syllabus_url TEXT
 );
