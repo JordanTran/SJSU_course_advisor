@@ -34,3 +34,14 @@ CREATE TABLE sections (
 CREATE INDEX idx_sections_course     ON sections(course_code);
 CREATE INDEX idx_sections_semester   ON sections(session, year);
 CREATE INDEX idx_sections_instructor ON sections(instructor);
+
+CREATE TABLE prerequisites (
+    course_code     VARCHAR(20)     NOT NULL
+        REFERENCES courses(course_code) ON DELETE CASCADE,
+    prereq_code     VARCHAR(20)     NOT NULL
+        REFERENCES courses(course_code) ON DELETE CASCADE,
+    PRIMARY KEY (course_code, prereq_code)
+);
+
+CREATE INDEX idx_prereqs_course ON prerequisites(course_code);
+CREATE INDEX idx_prereqs_prereq ON prerequisites(prereq_code);
