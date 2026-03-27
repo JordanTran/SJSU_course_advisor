@@ -1,14 +1,36 @@
--- ── Tables ────────────────────────────────────────────────────────────────────
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE TABLE IF NOT EXISTS section (
-    section_id  SERIAL          PRIMARY KEY,
-    course      VARCHAR(50)     NOT NULL,
-    syllabus_url TEXT           NOT NULL
+CREATE TABLE courses (
+    course_code     VARCHAR(20)     PRIMARY KEY,
+    course_title    VARCHAR(300)    NOT NULL
 );
 
--- ── Sample data for ISE 201 ───────────────────────────────────────────────────
+CREATE INDEX idx_courses_title_trgm
+    ON courses USING gin(course_title gin_trgm_ops);
 
-INSERT INTO section (course, syllabus_url) VALUES
-    ('ISE 201', 'https://sjsu.campusconcourse.com/view_syllabus?course_id=84918'),
-    ('ISE 201', 'https://sjsu.campusconcourse.com/view_syllabus?course_id=78869'),
-    ('ISE 201', 'https://sjsu.campusconcourse.com/view_syllabus?course_id=37772');
+CREATE TABLE course_codes (
+    course_code     VARCHAR(20)     PRIMARY KEY
+        REFERENCES courses(course_code) ON DELETE CASCADE,
+    subject         VARCHAR(10)     NOT NULL,
+    catalog_number  VARCHAR(10)     NOT NULL,
+    UNIQUE (subject, catalog_number)
+);
+
+CREATE INDEX idx_course_codes_subject ON course_codes(subject);
+
+CREATE TABLE sections (
+    id              SERIAL          PRIMARY KEY,
+    course_code     VARCHAR(20)     NOT NULL
+        REFERENCES courses(course_code) ON DELETE CASCADE,
+    session         VARCHAR(10)     NOT NULL
+        CHECK (session IN ('Fall', 'Spring', 'Summer', 'Winter')),
+    year            INT             NOT NULL,
+    section         VARCHAR(10)     NOT NULL,
+    instructor      VARCHAR(200),
+    syllabus_url    TEXT,
+    UNIQUE (course_code, session, year, section)
+);
+
+CREATE INDEX idx_sections_course     ON sections(course_code);
+CREATE INDEX idx_sections_semester   ON sections(session, year);
+CREATE INDEX idx_sections_instructor ON sections(instructor);
