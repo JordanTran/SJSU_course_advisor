@@ -146,17 +146,3 @@ class CourseAdvisor:
         if not key:
             raise EnvironmentError("Missing API key. Set GOOGLE_API_KEY in your environment.")
         return key
-
-
-# ── Example usage ─────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    advisor = CourseAdvisor()
-    questions = [
-        "What is the grading breakdown for this course?",
-        "What is the AI policy?",
-        "When is the project proposal due?",
-    ]
-    for q in questions:
-        print(f"Q: {q}")
-        print(f"A: {advisor.ask(q, course_name='ISE 201')}\n")
