@@ -62,22 +62,3 @@ uvicorn course_advisor_api:app --reload --env-file .env
 ```
 
 Then visit `http://localhost:8000` in your browser.
-
----
-
-## Project Structure
-
-```
-course_advisor/
-├── course_advisor.py        # Core advisor logic (Gemini + DB)
-├── course_advisor_api.py    # FastAPI app & routes
-├── course_advisor_db.sql    # Database schema
-├── requirements.txt
-├── .env                     # Environment variables (never commit)
-└── frontend/                # React + Vite + shadcn/ui
-    ├── src/
-    │   ├── App.tsx           # Main chat UI
-    │   └── components/ui/   # shadcn components
-    ├── dist/                 # Built output (after npm run build)
-    └── vite.config.ts
-```
