@@ -1,4 +1,21 @@
 -- ─────────────────────────────────────────────
+--  Drop OLD tables first
+-- ─────────────────────────────────────────────
+DROP TABLE IF EXISTS syllabus_chunks;
+DROP TABLE IF EXISTS section;
+
+-- ─────────────────────────────────────────────
+--  Drop NEW tables (in case of partial runs)
+-- ─────────────────────────────────────────────
+DROP TABLE IF EXISTS answer_feedback_chunk;
+DROP TABLE IF EXISTS answer_feedback;
+DROP TABLE IF EXISTS syllabus_chunk;
+DROP TABLE IF EXISTS section;
+DROP TABLE IF EXISTS course;
+DROP TABLE IF EXISTS instructor;
+DROP TABLE IF EXISTS department;
+
+-- ─────────────────────────────────────────────
 --  Requires pgvector extension
 -- ─────────────────────────────────────────────
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -20,7 +37,7 @@ CREATE TABLE course (
     department     VARCHAR(10)  NOT NULL,
     catalog_number VARCHAR(10)  NOT NULL,
     course_title   VARCHAR(255) NOT NULL,
-    units          SMALLINT     NOT NULL CHECK (units > 0),cd
+    units          SMALLINT     NOT NULL CHECK (units > 0),
 
     UNIQUE (department, catalog_number),
 
@@ -78,3 +95,23 @@ CREATE TABLE syllabus_chunk (
 -- ─────────────────────────────────────────────
 --  Indexes (TODO)
 -- ─────────────────────────────────────────────
+
+-- ─────────────────────────────────────────────
+--  Test Data (DELETE ONCE WEBSCRAPER IS READY)
+-- ─────────────────────────────────────────────
+
+INSERT INTO department (department, department_name, college) VALUES
+    ('ISE', 'Industrial & Systems Engineering', 'Charles W Davidson College of Engineering');
+
+INSERT INTO course (department, catalog_number, course_title, units) VALUES
+    ('ISE', '201', 'Math Foundations for Decision and Data Sciences', 3);
+
+INSERT INTO instructor (instructor_name) VALUES
+    ('Gupta, Shilpa'),
+    ('Mabrouk, Khaled'),
+    ('Amin, Supreeta');
+
+INSERT INTO section (course_id, year, session, section, instructor_id, delivery, syllabus_url) VALUES
+    (1, 2026, 'Spring', '1', 1, 'Hybrid', 'https://sjsu.campusconcourse.com/view_syllabus?course_id=84918'),
+    (1, 2025, 'Fall', '33', 2, 'Online', 'https://sjsu.campusconcourse.com/view_syllabus?course_id=78869'),
+    (1, 2024, 'Spring', '01', 3, 'Online', 'https://sjsu.campusconcourse.com/view_syllabus?course_id=37772');
