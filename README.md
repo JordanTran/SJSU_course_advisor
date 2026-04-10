@@ -14,6 +14,9 @@ An AI-powered course advisor chatbot for SJSU. Ask questions about course syllab
 
 ## 1. Database Setup
 
+Follow instructions to install pgvector:
+https://github.com/pgvector/pgvector
+
 Create the database and load the schema:
 
 ``` bash
@@ -29,9 +32,15 @@ In `.env`, fill in your DB_PASSWORD and GOOGLE_API_KEY values.
 
 ---
 
-## 3. Frontend
+## 3. Build embeddings
+Run script to populate embeddings table.
 
-### Production (recommended)
+``` bash
+cd scripts
+python embed_syllabi.py
+```
+
+## 4. Frontend
 
 Build the React app:
 
@@ -43,7 +52,7 @@ npm run build
 
 ---
 
-## 3. Backend
+## 5. Backend
 
 Install Python dependencies and start the FastAPI server:
 
@@ -53,22 +62,3 @@ uvicorn course_advisor_api:app --reload --env-file .env
 ```
 
 Then visit `http://localhost:8000` in your browser.
-
----
-
-## Project Structure
-
-```
-course_advisor/
-├── course_advisor.py        # Core advisor logic (Gemini + DB)
-├── course_advisor_api.py    # FastAPI app & routes
-├── course_advisor_db.sql    # Database schema
-├── requirements.txt
-├── .env                     # Environment variables (never commit)
-└── frontend/                # React + Vite + shadcn/ui
-    ├── src/
-    │   ├── App.tsx           # Main chat UI
-    │   └── components/ui/   # shadcn components
-    ├── dist/                 # Built output (after npm run build)
-    └── vite.config.ts
-```
