@@ -20,19 +20,27 @@ DB_CONFIG = {
 }
 
 GEMINI_API_KEY   = os.getenv("GOOGLE_API_KEY")
-EMBEDDING_MODEL  = "gemini-embedding-001"   # 768-dim output
+EMBEDDING_MODEL  = "gemini-embedding-001"
 EMBED_TASK_TYPE  = "RETRIEVAL_DOCUMENT"
-RATE_LIMIT_DELAY = 0.5                      # seconds between embedding calls
+RATE_LIMIT_DELAY = 0.5
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ── 1. Fetch all syllabus URLs from DB ────────────────────────────────────────
+# ── 1. Fetch all sections from DB ─────────────────────────────────────────────
 
 def fetch_sections(conn) -> list[dict]:
     with conn.cursor() as cur:
-        cur.execute("SELECT section_id, course, syllabus_url FROM section;")
+        cur.execute("""
+            SELECT
+                s.section_id,
+                c.course_title,
+                s.syllabus_url
+            FROM section s
+            JOIN course c ON s.course_id = c.course_id
+            WHERE s.syllabus_url IS NOT NULL;
+        """)
         rows = cur.fetchall()
-    return [{"section_id": r[0], "course": r[1], "url": r[2]} for r in rows]
+    return [{"section_id": r[0], "course_title": r[1], "url": r[2]} for r in rows]
 
 # ── 2. Scrape & chunk syllabus by section headings ────────────────────────────
 
@@ -48,7 +56,6 @@ def fetch_syllabus_text(url: str) -> BeautifulSoup | None:
 def chunk_by_headings(soup: BeautifulSoup) -> list[dict]:
     chunks = []
 
-    # Each top-level syllabus section is a div with class 'syl-item-l1'
     sections = soup.find_all("div", class_="syl-item-l1")
 
     if sections:
@@ -61,7 +68,6 @@ def chunk_by_headings(soup: BeautifulSoup) -> list[dict]:
 
             if content:
                 chunks.append({"title": title, "content": f"{title}\n{content}"})
-
     else:
         # Fallback: split on blank lines
         body_text = soup.get_text(separator="\n")
@@ -73,7 +79,7 @@ def chunk_by_headings(soup: BeautifulSoup) -> list[dict]:
 
     return chunks
 
-# ── 3. Generate embedding via Gemini embedding-001 ────────────────────────────
+# ── 3. Generate embedding via Gemini ──────────────────────────────────────────
 
 def embed_text(text: str) -> list[float]:
     result = client.models.embed_content(
@@ -90,7 +96,7 @@ def insert_chunks(conn, section_id: int, chunks: list[dict]):
         for chunk in chunks:
             cur.execute(
                 """
-                INSERT INTO syllabus_chunks (section_id, chunk_text, embedding)
+                INSERT INTO syllabus_chunk (section_id, chunk_text, embedding)
                 VALUES (%s, %s, %s::vector);
                 """,
                 (section_id, chunk["content"], str(chunk["embedding"])),
@@ -107,10 +113,10 @@ def main():
     print(f"Found {len(sections)} section(s) to process.\n")
 
     for section in sections:
-        sid  = section["section_id"]
-        url  = section["url"]
-        name = section["course"]
-        print(f"[{name}] section_id={sid}")
+        sid   = section["section_id"]
+        url   = section["url"]
+        title = section["course_title"]
+        print(f"[{title}] section_id={sid}")
         print(f"  Fetching: {url}")
 
         soup = fetch_syllabus_text(url)
@@ -126,13 +132,13 @@ def main():
                 vector = embed_text(chunk["content"])
                 embedded_chunks.append({**chunk, "embedding": vector})
                 print(f"    [{i+1}/{len(raw_chunks)}] '{chunk['title'][:50]}' ✓")
-                time.sleep(RATE_LIMIT_DELAY)   # respect API rate limits
+                time.sleep(RATE_LIMIT_DELAY)
             except Exception as e:
                 print(f"    [{i+1}/{len(raw_chunks)}] FAILED to embed '{chunk['title']}': {e}")
 
         if embedded_chunks:
             insert_chunks(conn, sid, embedded_chunks)
-            print(f"  Inserted {len(embedded_chunks)} chunk(s) into syllabus_chunks.\n")
+            print(f"  Inserted {len(embedded_chunks)} chunk(s) into syllabus_chunk.\n")
 
     conn.close()
     print("Done.")
