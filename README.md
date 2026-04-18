@@ -32,7 +32,28 @@ In `.env`, fill in your DB_PASSWORD and GOOGLE_API_KEY values.
 
 ---
 
-## 3. Build embeddings
+## 3. Install Python Dependencies
+
+Install Python dependencies:
+
+``` bash
+pip install -r requirements.txt
+```
+
+---
+
+## 4. Populate Database
+Download cmpe_syllabi_db.csv:
+https://drive.google.com/drive/folders/1Ec2DcPqYZegE0JpSzmUZgjR8sEv23tR1?usp=sharing
+
+Run script to populate database tables.
+
+``` bash
+cd scripts
+python load_database.py
+```
+
+## 5. Build Embeddings
 Run script to populate embeddings table.
 
 ``` bash
@@ -40,7 +61,7 @@ cd scripts
 python embed_syllabi.py
 ```
 
-## 4. Frontend
+## 6. Frontend
 
 Build the React app:
 
@@ -52,7 +73,7 @@ npm run build
 
 ---
 
-## 5. Backend
+## 7. Backend
 
 Install Python dependencies and start the FastAPI server:
 
