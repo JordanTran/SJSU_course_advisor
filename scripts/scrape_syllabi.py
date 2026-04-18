@@ -598,10 +598,13 @@ def save_csv(rows: list[dict], path: str = "cmpe_syllabi_db.csv"):
         return
 
     df = pd.DataFrame(rows, columns=SCRAPE_COLUMNS)
+    df = df.explode("section").reset_index(drop=True)
+    str_cols = df.select_dtypes(include="object").columns
+    df[str_cols] = df[str_cols].astype(str)
+    df[str_cols] = df[str_cols].apply(lambda col: col.str.strip())
     df['dept_name'] = df['subject'].map(DEPT_NAMES)
     df['subject_name'] = df['subject'].map(SUBJECT_NAMES)
     df['college_name'] = df['subject'].map(SUBJECT_COLLEGES)
-    df = df.explode("section").reset_index(drop=True)
     df = df.dropna()
     df = df.drop_duplicates(subset=['subject', 'catalog_number', 'year', 'session', 'section'])
     df.to_csv(path, index=False)
