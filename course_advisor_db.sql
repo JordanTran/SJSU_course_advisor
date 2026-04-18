@@ -60,8 +60,6 @@ CREATE TABLE course (
     course_id      SERIAL        PRIMARY KEY,
     subject        VARCHAR(10)   NOT NULL,
     catalog_number VARCHAR(10)   NOT NULL,
-    course_title   VARCHAR(255)  NOT NULL,
-    units          NUMERIC(4,2)  NOT NULL CHECK (units > 0 AND units <= 20),
 
     UNIQUE (subject, catalog_number),
 
@@ -103,12 +101,14 @@ CREATE TABLE instructor_department (
 -- ─────────────────────────────────────────────
 
 CREATE TABLE section (
-    section_id    SERIAL      PRIMARY KEY,
-    course_id     INT         NOT NULL,
-    year          SMALLINT    NOT NULL,
-    session       VARCHAR(20) NOT NULL,
-    section       VARCHAR(10) NOT NULL,
-    instructor_id INT         NOT NULL,
+    section_id    SERIAL        PRIMARY KEY,
+    course_id     INT           NOT NULL,
+    course_title  VARCHAR(255)  NOT NULL,
+    units         NUMERIC(4,2)  NOT NULL CHECK (units > 0),
+    year          SMALLINT      NOT NULL,
+    session       VARCHAR(20)   NOT NULL,
+    section       VARCHAR(10)   NOT NULL,
+    instructor_id INT           NOT NULL,
     syllabus_url  TEXT,
 
     UNIQUE (course_id, year, session, section),

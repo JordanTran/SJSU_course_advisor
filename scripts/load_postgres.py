@@ -73,11 +73,11 @@ def insert_subjects(cur, df: pd.DataFrame, dept_map: dict):
 
 
 def insert_courses(cur, df: pd.DataFrame):
-    courses = df[["subject", "catalog_number", "course_title", "units"]].drop_duplicates(
+    courses = df[["subject", "catalog_number"]].drop_duplicates(
         subset=["subject", "catalog_number"]
     )
     execute_values(cur, """
-        INSERT INTO course (subject, catalog_number, course_title, units)
+        INSERT INTO course (subject, catalog_number)
         VALUES %s
         ON CONFLICT (subject, catalog_number) DO NOTHING
     """, [tuple(r) for r in courses.itertuples(index=False)])
@@ -115,14 +115,17 @@ def insert_sections(cur, df: pd.DataFrame, instructor_map: dict):
     cur.execute("SELECT subject, catalog_number, course_id FROM course")
     course_map = {(subj, cat): cid for subj, cat, cid in cur.fetchall()}
 
-    sections = df[["subject", "catalog_number", "year", "session", "section", "instructor_name", "syllabus_url"]]
+    sections = df[["subject", "catalog_number", "course_title", "units",
+                   "year", "session", "section", "instructor_name", "syllabus_url"]]
     execute_values(cur, """
-        INSERT INTO section (course_id, year, session, section, instructor_id, syllabus_url)
+        INSERT INTO section (course_id, course_title, units, year, session, section, instructor_id, syllabus_url)
         VALUES %s
         ON CONFLICT (course_id, year, session, section) DO NOTHING
     """, [
         (
             course_map[(row.subject, row.catalog_number)],
+            row.course_title,
+            row.units,
             row.year,
             row.session,
             row.section,
@@ -132,6 +135,59 @@ def insert_sections(cur, df: pd.DataFrame, instructor_map: dict):
         for row in sections.itertuples(index=False)
     ])
     print(f"Inserted {len(sections)} sections")
+
+
+# ─────────────────────────────────────────────
+#  Validate
+# ─────────────────────────────────────────────
+def validate(cur, df: pd.DataFrame):
+    cur.execute("""
+        SELECT
+            s.subject,
+            c.catalog_number,
+            sec.course_title,
+            sec.units,
+            i.instructor_name,
+            sec.year,
+            sec.session,
+            sec.section,
+            sec.syllabus_url,
+            d.dept_name,
+            s.subject_name,
+            col.college_name
+        FROM section sec
+        JOIN course c         ON sec.course_id     = c.course_id
+        JOIN subject s        ON c.subject         = s.subject
+        JOIN department d     ON s.dept_id         = d.dept_id
+        JOIN college col      ON d.college_id      = col.college_id
+        JOIN instructor i     ON sec.instructor_id = i.instructor_id
+        ORDER BY s.subject, c.catalog_number, sec.year, sec.session, sec.section
+    """)
+
+    cols = ["subject", "catalog_number", "course_title", "units", "instructor_name",
+            "year", "session", "section", "syllabus_url", "dept_name", "subject_name", "college_name"]
+
+    db_df = pd.DataFrame(cur.fetchall(), columns=cols)
+
+    # Cast both to consistent types
+    for frame in [df, db_df]:
+        frame["section"]        = frame["section"].astype(str)
+        frame["catalog_number"] = frame["catalog_number"].astype(str)
+        frame["year"]           = frame["year"].astype(int)
+        frame["units"]          = frame["units"].astype(float)
+
+    df_sorted = df[cols].sort_values(cols).reset_index(drop=True)
+    db_sorted = db_df.sort_values(cols).reset_index(drop=True)
+
+    print(f"Original rows : {len(df_sorted)}")
+    print(f"DB rows       : {len(db_sorted)}")
+
+    missing = df_sorted.merge(db_sorted, how="left", indicator=True).query('_merge == "left_only"')
+    if len(missing) > 0:
+        print(f"\n{len(missing)} rows in CSV missing from DB:")
+        print(missing)
+    else:
+        print("\nAll rows match!")
 
 
 # ─────────────────────────────────────────────
@@ -166,6 +222,9 @@ def main():
 
         insert_sections(cur, df, instructor_map)
         conn.commit()
+
+        print("\nValidating...")
+        validate(cur, df)
 
         print("All data inserted successfully!")
 
