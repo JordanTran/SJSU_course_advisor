@@ -76,20 +76,19 @@ class CourseAdvisor:
                 SELECT
                     sc.chunk_id,
                     sc.chunk_text,
-                    c.course_title,
-                    c.units,
+                    s.course_title,
+                    s.units,
                     i.instructor_name,
                     s.session,
                     s.year,
                     s.section,
-                    s.delivery,
                     1 - (sc.embedding <=> %s::vector) AS similarity
                 FROM syllabus_chunk sc
                 JOIN section s    ON s.section_id    = sc.section_id
                 JOIN course c     ON c.course_id     = s.course_id
                 JOIN instructor i ON i.instructor_id = s.instructor_id
-                WHERE c.department     = %s
-                  AND c.catalog_number = %s
+                WHERE c.subject        = %s
+                AND c.catalog_number = %s
                 ORDER BY sc.embedding <=> %s::vector
                 LIMIT %s;
                 """,
@@ -107,8 +106,7 @@ class CourseAdvisor:
                 "session":      row[5],
                 "year":         row[6],
                 "section":      row[7],
-                "delivery":     row[8],
-                "similarity":   row[9],
+                "similarity":   row[8],
             }
             for row in rows
         ]
