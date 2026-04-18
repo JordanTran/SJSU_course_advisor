@@ -1,12 +1,3 @@
-"""
-Setup:
-    pip install playwright pandas
-    playwright install chromium
- 
-Run:
-    python3 scrape_syllabi.py
-"""
-
 import re
 import time
 import random
