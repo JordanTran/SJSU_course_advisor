@@ -109,7 +109,8 @@ CREATE TABLE section (
     session       VARCHAR(20)   NOT NULL,
     section       VARCHAR(10)   NOT NULL,
     instructor_id INT           NOT NULL,
-    syllabus_url  TEXT,
+    syllabus_url  TEXT          NOT NULL,
+    delivery      VARCHAR(20)   NOT NULL,
 
     UNIQUE (course_id, year, session, section),
 
@@ -128,6 +129,7 @@ CREATE TABLE section (
 CREATE TABLE syllabus_chunk (
     chunk_id      SERIAL       PRIMARY KEY,
     section_id    INT          NOT NULL,
+    chunk_title    TEXT        NOT NULL,
     chunk_text    TEXT         NOT NULL,
     embedding     vector(3072) NOT NULL,
 
