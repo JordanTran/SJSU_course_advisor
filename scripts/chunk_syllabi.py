@@ -16,6 +16,13 @@ OUTPUT_CSV    = os.path.join(BASE_DIR, "chunks.csv")
 MAX_WORKERS   = 25
 REQUEST_DELAY = 0.1
 
+# All metadata fields carried through from the input CSV
+META_FIELDS = [
+    "subject", "catalog_number", "course_title", "units",
+    "instructor_name", "year", "session", "section",
+    "syllabus_url", "dept_name", "subject_name", "college_name",
+]
+
 # ── Session with realistic browser headers ────────────────────────────────────
 
 SESSION = requests.Session()
@@ -34,15 +41,9 @@ def fetch_sections(input_csv: str) -> list[dict]:
         url = row["syllabus_url"].strip()
         if not url:
             continue
-        sections.append({
-            "subject":        row["subject"],
-            "catalog_number": row["catalog_number"],
-            "session":        row["session"],
-            "year":           row["year"],
-            "section":        row["section"],
-            "course_title":   row["course_title"],
-            "url":            url,
-        })
+        sec = {field: row[field] for field in META_FIELDS}
+        sec["url"] = url
+        sections.append(sec)
     return sections
 
 # ── 2. Scrape & chunk syllabus by section headings ────────────────────────────
@@ -60,18 +61,20 @@ def fetch_syllabus_text(url: str) -> BeautifulSoup | None:
             print(f"  [ERROR] Could not fetch {url}: {e}")
             return None
 
-def chunk_by_headings(soup: BeautifulSoup) -> list[dict]:
-    chunks = []
+DELIVERY_VALUES = {"In Person", "Fully Online", "Online", "Hybrid"}
 
-    # ── Header chunk: Section Information ────────────────────────────────────
+def get_delivery(soup: BeautifulSoup) -> str:
+    """Extract the delivery mode from the syllabus header meta items by matching known values."""
     header = soup.find(class_="syl-header")
     if header:
-        h1 = header.find("h1")
-        if h1:
-            course_name = h1.get_text(separator=" ", strip=True)
-            meta_items  = [li.get_text(strip=True) for li in header.find_all("li", class_="list-inline-item")]
-            content     = " ".join([course_name] + meta_items)
-            chunks.append({"title": "Section Information", "content": content})
+        meta_items = [li.get_text(strip=True) for li in header.find_all("li", class_="list-inline-item")]
+        for item in meta_items:
+            if item in DELIVERY_VALUES:
+                return item
+    return ""
+
+def chunk_by_headings(soup: BeautifulSoup) -> list[dict]:
+    chunks = []
 
     # ── l1 section chunks ─────────────────────────────────────────────────────
     sections = soup.find_all("div", class_="syl-item-l1")
@@ -121,25 +124,27 @@ def process_section(sec: dict) -> list[dict]:
     if soup is None:
         return []
 
-    chunks = chunk_by_headings(soup)
+    delivery = get_delivery(soup)
+    if not delivery:
+        return []
 
-    if len(chunks) <= 1:
+    chunks = chunk_by_headings(soup)
+    if not chunks:
         return []
 
     return [
         {
-            "subject":        sec["subject"],
-            "catalog_number": sec["catalog_number"],
-            "session":        sec["session"],
-            "year":           sec["year"],
-            "section":        sec["section"],
-            "chunk_title":    chunk["title"],
-            "chunk_text":     chunk["content"],
+            **{field: sec[field] for field in META_FIELDS},
+            "delivery":    delivery,
+            "chunk_title": chunk["title"],
+            "chunk_text":  chunk["content"],
         }
         for chunk in chunks
     ]
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
+OUTPUT_COLUMNS = META_FIELDS + ["delivery", "chunk_title", "chunk_text"]
 
 def main():
     sections = fetch_sections(INPUT_CSV)
@@ -168,13 +173,13 @@ def main():
                 continue
 
             if not result:
-                print(f"{progress} [SKIPPED] {label} (private or no content)")
+                print(f"{progress} [SKIPPED] {label} (no delivery found)")
             else:
                 print(f"{progress} [OK] {label} — {len(result)} chunk(s)")
                 with lock:
                     rows.extend(result)
 
-    df_out = pd.DataFrame(rows, columns=["subject", "catalog_number", "session", "year", "section", "chunk_title", "chunk_text"])
+    df_out = pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
     df_out.to_csv(OUTPUT_CSV, index=False, encoding="utf-8")
     print(f"\nDone. Wrote {len(df_out)} chunk(s) to '{OUTPUT_CSV}'.")
 
