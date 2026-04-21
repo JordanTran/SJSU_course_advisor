@@ -180,6 +180,7 @@ def main():
                     rows.extend(result)
 
     df_out = pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
+    df_out = df_out.dropna()
     df_out.to_csv(OUTPUT_CSV, index=False, encoding="utf-8")
     print(f"\nDone. Wrote {len(df_out)} chunk(s) to '{OUTPUT_CSV}'.")
 
