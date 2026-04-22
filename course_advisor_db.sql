@@ -129,9 +129,9 @@ CREATE TABLE section (
 CREATE TABLE syllabus_chunk (
     chunk_id      SERIAL       PRIMARY KEY,
     section_id    INT          NOT NULL,
-    chunk_title    TEXT        NOT NULL,
+    chunk_title   TEXT         NOT NULL,
     chunk_text    TEXT         NOT NULL,
-    embedding     vector(3072) NOT NULL,
+    embedding     vector(768)  NOT NULL,
 
     FOREIGN KEY (section_id)
         REFERENCES section (section_id)
