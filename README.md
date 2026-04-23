@@ -38,31 +38,21 @@ Install Python dependencies:
 
 ``` bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
 ---
 
 ## 4. Populate Database
-Download cmpe_syllabi_db.csv:
+Download chunks_with_embeddings.csv:
 https://drive.google.com/drive/folders/1Ec2DcPqYZegE0JpSzmUZgjR8sEv23tR1?usp=sharing
 
 Run script to populate database tables.
 
 ``` bash
-cd scripts
-python load_database.py
+python scripts/load_database.py
 ```
 
-## 5. Build Embeddings
-Run script to populate embeddings table.
-
-``` bash
-cd scripts
-python embed_syllabi.py
-```
-
-## 6. Frontend
+## 5. Frontend
 
 Build the React app:
 
@@ -74,12 +64,12 @@ npm run build
 
 ---
 
-## 7. Backend
+## 6. Backend
 
-Install Python dependencies and start the FastAPI server:
+Navigate back to root directory and start the FastAPI server:
 
-``` bash
-pip install -r requirements.txt
+```bash
+cd ..
 uvicorn course_advisor_api:app --reload --env-file .env
 ```
 
