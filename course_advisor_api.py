@@ -1,6 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -19,11 +20,19 @@ async def lifespan(app: FastAPI):
     """
     Initialise shared resources on startup; release them on shutdown.
 
-    CourseAdvisor now holds a ThreadedConnectionPool. Calling close() on
-    shutdown cleanly returns all Postgres connections instead of leaking them.
+    CourseAdvisor holds a ThreadedConnectionPool. Calling close() on shutdown
+    cleanly returns all Postgres connections instead of leaking them.
+
+    The anyio thread capacity limiter is capped to _POOL_MAX_CONN so that the
+    number of concurrent sync-endpoint worker threads never exceeds the number
+    of available DB connections, preventing pool exhaustion under burst traffic.
     """
     global advisor
     advisor = CourseAdvisor()
+
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = CourseAdvisor._POOL_MAX_CONN
+
     yield
     advisor.close()
 
@@ -60,6 +69,9 @@ def ask(payload: QuestionRequest) -> AnswerResponse:
         answer = advisor.ask(payload.question, payload.course_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        # Pool exhaustion: ask the client to retry rather than returning a 500.
+        raise HTTPException(status_code=503, detail=str(e))
     return AnswerResponse(answer=answer)
 
 
