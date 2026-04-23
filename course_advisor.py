@@ -1,4 +1,5 @@
 import os
+import threading
 from contextlib import contextmanager
 
 import numpy as np
@@ -42,11 +43,17 @@ class CourseAdvisor:
     TOP_K = 5
 
     # Pool size bounds — tune to your Postgres max_connections budget.
+    # Also used to cap the FastAPI thread pool (see course_advisor_api.py),
+    # so that the number of concurrent threads never exceeds available DB connections.
     _POOL_MIN_CONN = 2
     _POOL_MAX_CONN = 10
 
     def __init__(self) -> None:
-        self._client = genai.Client(api_key=self._resolve_api_key())
+        self._api_key = self._resolve_api_key()
+        # Thread-local storage for the Gemini client.
+        # Each worker thread gets its own client instance, avoiding any potential
+        # shared-state issues inside the SDK across concurrent requests.
+        self._local = threading.local()
         self._pool = self._create_pool()
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -81,6 +88,21 @@ class CourseAdvisor:
     def close(self) -> None:
         """Release all pooled connections. Call on application shutdown."""
         self._pool.closeall()
+
+    # ── Gemini client (thread-local) ──────────────────────────────────────────
+
+    @property
+    def _client(self) -> genai.Client:
+        """
+        Return a per-thread Gemini client, creating one on first access.
+
+        genai.Client wraps an HTTP session whose thread-safety is not guaranteed
+        by the SDK. Using threading.local() ensures each worker thread owns its
+        own client, eliminating any shared-state risk at negligible overhead.
+        """
+        if not hasattr(self._local, "client"):
+            self._local.client = genai.Client(api_key=self._api_key)
+        return self._local.client
 
     # ── RAG ───────────────────────────────────────────────────────────────────
 
@@ -205,6 +227,10 @@ class CourseAdvisor:
         Borrow a connection from the pool for the duration of a with-block,
         then return it — even if an exception is raised.
 
+        Raises RuntimeError if the pool is exhausted (all _POOL_MAX_CONN
+        connections are checked out), so the API layer can surface a 503
+        instead of an unhandled 500.
+
         register_vector is called on every checkout because psycopg2's pool
         creates connections lazily and provides no post-connect hook. It is
         idempotent, so calling it on recycled connections is safe.
@@ -214,7 +240,11 @@ class CourseAdvisor:
                 with conn.cursor() as cur:
                     cur.execute(...)
         """
-        conn = self._pool.getconn()
+        try:
+            conn = self._pool.getconn()
+        except pg_pool.PoolError as e:
+            raise RuntimeError("DB connection pool exhausted — try again shortly.") from e
+
         register_vector(conn)  # idempotent; ensures vector type is registered
         try:
             yield conn
