@@ -1,7 +1,8 @@
 import os
+from contextlib import contextmanager
 
 import numpy as np
-import psycopg2
+from psycopg2 import pool as pg_pool
 from google import genai
 from google.genai import types
 from pgvector.psycopg2 import register_vector
@@ -40,9 +41,13 @@ class CourseAdvisor:
     GENERATION_MODEL = "gemini-3-flash-preview"
     TOP_K = 5
 
+    # Pool size bounds — tune to your Postgres max_connections budget.
+    _POOL_MIN_CONN = 2
+    _POOL_MAX_CONN = 10
+
     def __init__(self) -> None:
         self._client = genai.Client(api_key=self._resolve_api_key())
-        self._db_conn = self._connect_db()
+        self._pool = self._create_pool()
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -73,6 +78,10 @@ class CourseAdvisor:
         parts = response.candidates[0].content.parts
         return "".join(p.text for p in parts if hasattr(p, "text") and p.text).strip()
 
+    def close(self) -> None:
+        """Release all pooled connections. Call on application shutdown."""
+        self._pool.closeall()
+
     # ── RAG ───────────────────────────────────────────────────────────────────
 
     def _embed_query(self, text: str) -> list[float]:
@@ -101,36 +110,37 @@ class CourseAdvisor:
     def _retrieve(self, question: str, department: str, catalog_number: str) -> list[dict]:
         vector_str = "[" + ",".join(str(v) for v in self._embed_query(question)) + "]"
 
-        with self._db_conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    sc.chunk_id,
-                    sc.chunk_title,
-                    sc.chunk_text,
-                    c.subject,
-                    c.catalog_number,
-                    s.course_title,
-                    s.units,
-                    s.session,
-                    s.year,
-                    s.section,
-                    s.delivery,
-                    s.syllabus_url,
-                    i.instructor_name,
-                    1 - (sc.embedding <=> %s::vector) AS similarity
-                FROM syllabus_chunk sc
-                JOIN section s    ON s.section_id    = sc.section_id
-                JOIN course c     ON c.course_id     = s.course_id
-                JOIN instructor i ON i.instructor_id = s.instructor_id
-                WHERE c.subject        = %s
-                AND c.catalog_number = %s
-                ORDER BY sc.embedding <=> %s::vector
-                LIMIT %s;
-                """,
-                (vector_str, department, catalog_number, vector_str, self.TOP_K),
-            )
-            rows = cur.fetchall()
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        sc.chunk_id,
+                        sc.chunk_title,
+                        sc.chunk_text,
+                        c.subject,
+                        c.catalog_number,
+                        s.course_title,
+                        s.units,
+                        s.session,
+                        s.year,
+                        s.section,
+                        s.delivery,
+                        s.syllabus_url,
+                        i.instructor_name,
+                        1 - (sc.embedding <=> %s::vector) AS similarity
+                    FROM syllabus_chunk sc
+                    JOIN section s    ON s.section_id    = sc.section_id
+                    JOIN course c     ON c.course_id     = s.course_id
+                    JOIN instructor i ON i.instructor_id = s.instructor_id
+                    WHERE c.subject        = %s
+                    AND c.catalog_number = %s
+                    ORDER BY sc.embedding <=> %s::vector
+                    LIMIT %s;
+                    """,
+                    (vector_str, department, catalog_number, vector_str, self.TOP_K),
+                )
+                rows = cur.fetchall()
 
         return [
             {
@@ -170,8 +180,17 @@ class CourseAdvisor:
 
     # ── DB ────────────────────────────────────────────────────────────────────
 
-    def _connect_db(self):
-        conn = psycopg2.connect(
+    def _create_pool(self) -> pg_pool.ThreadedConnectionPool:
+        """
+        Create a thread-safe connection pool.
+
+        ThreadedConnectionPool uses a lock internally so that getconn/putconn
+        are safe to call from multiple threads simultaneously — unlike a bare
+        psycopg2 connection, which must never be shared across threads.
+        """
+        return pg_pool.ThreadedConnectionPool(
+            minconn=self._POOL_MIN_CONN,
+            maxconn=self._POOL_MAX_CONN,
             host=os.getenv("DB_HOST", "localhost"),
             port=int(os.getenv("DB_PORT", "5432")),
             dbname=os.getenv("DB_NAME", "course_advisor"),
@@ -179,8 +198,32 @@ class CourseAdvisor:
             password=os.getenv("DB_PASSWORD", ""),
             options="-c client_encoding=UTF8",
         )
-        register_vector(conn)
-        return conn
+
+    @contextmanager
+    def _get_connection(self):
+        """
+        Borrow a connection from the pool for the duration of a with-block,
+        then return it — even if an exception is raised.
+
+        register_vector is called on every checkout because psycopg2's pool
+        creates connections lazily and provides no post-connect hook. It is
+        idempotent, so calling it on recycled connections is safe.
+
+        Usage:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(...)
+        """
+        conn = self._pool.getconn()
+        register_vector(conn)  # idempotent; ensures vector type is registered
+        try:
+            yield conn
+            conn.commit()          # no-op for read-only queries, harmless
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._pool.putconn(conn)   # always returned to the pool
 
     @staticmethod
     def _resolve_api_key() -> str:
