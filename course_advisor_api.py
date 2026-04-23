@@ -1,7 +1,6 @@
 import os
 from contextlib import asynccontextmanager
 
-import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -20,21 +19,19 @@ async def lifespan(app: FastAPI):
     """
     Initialise shared resources on startup; release them on shutdown.
 
-    CourseAdvisor holds a ThreadedConnectionPool. Calling close() on shutdown
-    cleanly returns all Postgres connections instead of leaking them.
-
-    The anyio thread capacity limiter is capped to _POOL_MAX_CONN so that the
-    number of concurrent sync-endpoint worker threads never exceeds the number
-    of available DB connections, preventing pool exhaustion under burst traffic.
+    setup() creates the asyncpg connection pool. Because ask() is now a
+    native coroutine, FastAPI runs it directly on the event loop — no worker
+    threads are involved, so no anyio thread-limiter is needed. The DB pool
+    is only held during the short vector search, not across the full LLM call,
+    so _POOL_MAX_CONN no longer caps overall concurrency.
     """
     global advisor
     advisor = CourseAdvisor()
-
-    limiter = anyio.to_thread.current_default_thread_limiter()
-    limiter.total_tokens = CourseAdvisor._POOL_MAX_CONN
+    await advisor.setup()
 
     yield
-    advisor.close()
+
+    await advisor.close()
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -63,14 +60,13 @@ class AnswerResponse(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AnswerResponse)
-def ask(payload: QuestionRequest) -> AnswerResponse:
+async def ask(payload: QuestionRequest) -> AnswerResponse:
     """Ask the course advisor a question grounded in the syllabi for a given course."""
     try:
-        answer = advisor.ask(payload.question, payload.course_name)
+        answer = await advisor.ask(payload.question, payload.course_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
-        # Pool exhaustion: ask the client to retry rather than returning a 500.
         raise HTTPException(status_code=503, detail=str(e))
     return AnswerResponse(answer=answer)
 

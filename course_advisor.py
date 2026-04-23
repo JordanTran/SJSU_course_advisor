@@ -1,12 +1,12 @@
+import asyncio
 import os
-import threading
-from contextlib import contextmanager
+import random
 
+import asyncpg
 import numpy as np
-from psycopg2 import pool as pg_pool
 from google import genai
 from google.genai import types
-from pgvector.psycopg2 import register_vector
+from pgvector.asyncpg import register_vector
 
 
 class CourseAdvisor:
@@ -38,30 +38,61 @@ class CourseAdvisor:
     - Be concise, friendly, and clear.
     """
 
-    EMBEDDING_MODEL = "gemini-embedding-001"
+    EMBEDDING_MODEL  = "gemini-embedding-001"
     GENERATION_MODEL = "gemini-3-flash-preview"
-    TOP_K = 5
+    TOP_K            = 5
 
-    # Pool size bounds — tune to your Postgres max_connections budget.
-    # Also used to cap the FastAPI thread pool (see course_advisor_api.py),
-    # so that the number of concurrent threads never exceeds available DB connections.
+    # DB pool — tune to your Postgres max_connections budget.
+    # No longer tied to thread count: connections are only held for the
+    # brief vector search, not for the full duration of the LLM calls.
     _POOL_MIN_CONN = 2
     _POOL_MAX_CONN = 10
 
+    # Retry config for Gemini API calls.
+    # Exponential backoff with full jitter handles rate-limit bursts gracefully.
+    _RETRY_MAX_ATTEMPTS = 4
+    _RETRY_BASE_DELAY   = 1.0   # seconds
+    _RETRY_MAX_DELAY    = 30.0  # seconds
+
     def __init__(self) -> None:
         self._api_key = self._resolve_api_key()
-        # Thread-local storage for the Gemini client.
-        # Each worker thread gets its own client instance, avoiding any potential
-        # shared-state issues inside the SDK across concurrent requests.
-        self._local = threading.local()
-        self._pool = self._create_pool()
+        # genai.Client exposes async methods via the .aio property.
+        # A single client is safe to share across coroutines.
+        self._client = genai.Client(api_key=self._api_key)
+        self._pool: asyncpg.Pool | None = None
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    async def setup(self) -> None:
+        """
+        Async initialisation — call once at startup before serving requests.
+
+        asyncpg.create_pool connects eagerly up to min_size and registers the
+        pgvector codec on every new connection via the init callback, so vector
+        columns are decoded to numpy arrays automatically.
+        """
+        self._pool = await asyncpg.create_pool(
+            host=os.getenv("DB_HOST", "localhost"),
+            port=int(os.getenv("DB_PORT", "5432")),
+            database=os.getenv("DB_NAME", "course_advisor"),
+            user=os.getenv("DB_USER", "postgres"),
+            password=os.getenv("DB_PASSWORD", ""),
+            min_size=self._POOL_MIN_CONN,
+            max_size=self._POOL_MAX_CONN,
+            init=register_vector,   # registers pgvector codec on every connection
+        )
+
+    async def close(self) -> None:
+        """Release all pooled connections. Call on application shutdown."""
+        if self._pool:
+            await self._pool.close()
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def ask(self, question: str, course_name: str) -> str:
+    async def ask(self, question: str, course_name: str) -> str:
         """Retrieve relevant syllabus chunks via RAG and answer the question."""
         department, catalog_number = course_name.strip().split(" ", 1)
-        chunks = self._retrieve(question, department, catalog_number)
+        chunks = await self._retrieve(question, department, catalog_number)
         if not chunks:
             return f"No syllabus content found for '{course_name}'."
 
@@ -74,7 +105,8 @@ class CourseAdvisor:
             f"Student question: {question}"
         )
 
-        response = self._client.models.generate_content(
+        response = await self._with_retry(
+            self._client.aio.models.generate_content,
             model=self.GENERATION_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -85,29 +117,33 @@ class CourseAdvisor:
         parts = response.candidates[0].content.parts
         return "".join(p.text for p in parts if hasattr(p, "text") and p.text).strip()
 
-    def close(self) -> None:
-        """Release all pooled connections. Call on application shutdown."""
-        self._pool.closeall()
+    # ── Retry ─────────────────────────────────────────────────────────────────
 
-    # ── Gemini client (thread-local) ──────────────────────────────────────────
-
-    @property
-    def _client(self) -> genai.Client:
+    async def _with_retry(self, fn, *args, **kwargs):
         """
-        Return a per-thread Gemini client, creating one on first access.
+        Call an async function with exponential backoff + full jitter.
 
-        genai.Client wraps an HTTP session whose thread-safety is not guaranteed
-        by the SDK. Using threading.local() ensures each worker thread owns its
-        own client, eliminating any shared-state risk at negligible overhead.
+        Retries on any exception (Gemini rate limits, transient network errors).
+        Re-raises on the final attempt so the caller sees the real error.
+
+        Full jitter ( random * capped_delay ) avoids thundering-herd re-bursts
+        when many concurrent requests hit a rate limit at the same time.
         """
-        if not hasattr(self._local, "client"):
-            self._local.client = genai.Client(api_key=self._api_key)
-        return self._local.client
+        for attempt in range(self._RETRY_MAX_ATTEMPTS):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception:
+                if attempt == self._RETRY_MAX_ATTEMPTS - 1:
+                    raise
+                cap   = min(self._RETRY_BASE_DELAY * (2 ** attempt), self._RETRY_MAX_DELAY)
+                delay = random.uniform(0, cap)
+                await asyncio.sleep(delay)
 
     # ── RAG ───────────────────────────────────────────────────────────────────
 
-    def _embed_query(self, text: str) -> list[float]:
-        result = self._client.models.embed_content(
+    async def _embed_query(self, text: str) -> np.ndarray:
+        result = await self._with_retry(
+            self._client.aio.models.embed_content,
             model=self.EMBEDDING_MODEL,
             contents=text,
             config=types.EmbedContentConfig(
@@ -118,7 +154,7 @@ class CourseAdvisor:
         return self._normalize(result.embeddings[0].values)
 
     @staticmethod
-    def _normalize(values: list[float]) -> list[float]:
+    def _normalize(values: list[float]) -> np.ndarray:
         """L2-normalise a vector using numpy.
 
         gemini-embedding-001 only auto-normalises 3072-dim output. For any other
@@ -127,59 +163,66 @@ class CourseAdvisor:
         """
         v    = np.array(values)
         norm = np.linalg.norm(v)
-        return (v / norm).tolist() if norm > 0 else values
+        return (v / norm) if norm > 0 else v
 
-    def _retrieve(self, question: str, department: str, catalog_number: str) -> list[dict]:
-        vector_str = "[" + ",".join(str(v) for v in self._embed_query(question)) + "]"
+    async def _retrieve(self, question: str, department: str, catalog_number: str) -> list[dict]:
+        """
+        Embed the question then fetch the top-K most similar syllabus chunks.
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        sc.chunk_id,
-                        sc.chunk_title,
-                        sc.chunk_text,
-                        c.subject,
-                        c.catalog_number,
-                        s.course_title,
-                        s.units,
-                        s.session,
-                        s.year,
-                        s.section,
-                        s.delivery,
-                        s.syllabus_url,
-                        i.instructor_name,
-                        1 - (sc.embedding <=> %s::vector) AS similarity
-                    FROM syllabus_chunk sc
-                    JOIN section s    ON s.section_id    = sc.section_id
-                    JOIN course c     ON c.course_id     = s.course_id
-                    JOIN instructor i ON i.instructor_id = s.instructor_id
-                    WHERE c.subject        = %s
-                    AND c.catalog_number = %s
-                    ORDER BY sc.embedding <=> %s::vector
-                    LIMIT %s;
-                    """,
-                    (vector_str, department, catalog_number, vector_str, self.TOP_K),
-                )
-                rows = cur.fetchall()
+        The DB connection is acquired only for the duration of the query and
+        immediately returned to the pool — it is never held across LLM calls.
+        asyncpg passes the numpy embedding directly as a pgvector parameter
+        (registered via the init callback in setup()), so no manual string
+        serialisation is needed.
+        """
+        embedding = await self._embed_query(question)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    sc.chunk_id,
+                    sc.chunk_title,
+                    sc.chunk_text,
+                    c.subject,
+                    c.catalog_number,
+                    s.course_title,
+                    s.units,
+                    s.session,
+                    s.year,
+                    s.section,
+                    s.delivery,
+                    s.syllabus_url,
+                    i.instructor_name,
+                    1 - (sc.embedding <=> $1) AS similarity
+                FROM syllabus_chunk sc
+                JOIN section s    ON s.section_id    = sc.section_id
+                JOIN course c     ON c.course_id     = s.course_id
+                JOIN instructor i ON i.instructor_id = s.instructor_id
+                WHERE c.subject        = $2
+                  AND c.catalog_number = $3
+                ORDER BY sc.embedding <=> $1
+                LIMIT $4;
+                """,
+                embedding, department, catalog_number, self.TOP_K,
+            )
 
         return [
             {
-                "chunk_id":       row[0],
-                "chunk_title":    row[1],
-                "chunk_text":     row[2],
-                "subject":        row[3],
-                "catalog_number": row[4],
-                "course_title":   row[5],
-                "units":          row[6],
-                "session":        row[7],
-                "year":           row[8],
-                "section":        row[9],
-                "delivery":       row[10],
-                "syllabus_url":   row[11],
-                "instructor":     row[12],
-                "similarity":     row[13],
+                "chunk_id":       row["chunk_id"],
+                "chunk_title":    row["chunk_title"],
+                "chunk_text":     row["chunk_text"],
+                "subject":        row["subject"],
+                "catalog_number": row["catalog_number"],
+                "course_title":   row["course_title"],
+                "units":          row["units"],
+                "session":        row["session"],
+                "year":           row["year"],
+                "section":        row["section"],
+                "delivery":       row["delivery"],
+                "syllabus_url":   row["syllabus_url"],
+                "instructor":     row["instructor_name"],
+                "similarity":     row["similarity"],
             }
             for row in rows
         ]
@@ -200,60 +243,7 @@ class CourseAdvisor:
             for c in chunks
         )
 
-    # ── DB ────────────────────────────────────────────────────────────────────
-
-    def _create_pool(self) -> pg_pool.ThreadedConnectionPool:
-        """
-        Create a thread-safe connection pool.
-
-        ThreadedConnectionPool uses a lock internally so that getconn/putconn
-        are safe to call from multiple threads simultaneously — unlike a bare
-        psycopg2 connection, which must never be shared across threads.
-        """
-        return pg_pool.ThreadedConnectionPool(
-            minconn=self._POOL_MIN_CONN,
-            maxconn=self._POOL_MAX_CONN,
-            host=os.getenv("DB_HOST", "localhost"),
-            port=int(os.getenv("DB_PORT", "5432")),
-            dbname=os.getenv("DB_NAME", "course_advisor"),
-            user=os.getenv("DB_USER", "postgres"),
-            password=os.getenv("DB_PASSWORD", ""),
-            options="-c client_encoding=UTF8",
-        )
-
-    @contextmanager
-    def _get_connection(self):
-        """
-        Borrow a connection from the pool for the duration of a with-block,
-        then return it — even if an exception is raised.
-
-        Raises RuntimeError if the pool is exhausted (all _POOL_MAX_CONN
-        connections are checked out), so the API layer can surface a 503
-        instead of an unhandled 500.
-
-        register_vector is called on every checkout because psycopg2's pool
-        creates connections lazily and provides no post-connect hook. It is
-        idempotent, so calling it on recycled connections is safe.
-
-        Usage:
-            with self._get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(...)
-        """
-        try:
-            conn = self._pool.getconn()
-        except pg_pool.PoolError as e:
-            raise RuntimeError("DB connection pool exhausted — try again shortly.") from e
-
-        register_vector(conn)  # idempotent; ensures vector type is registered
-        try:
-            yield conn
-            conn.commit()          # no-op for read-only queries, harmless
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            self._pool.putconn(conn)   # always returned to the pool
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
     def _resolve_api_key() -> str:
