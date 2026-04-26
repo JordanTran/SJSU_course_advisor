@@ -82,11 +82,13 @@ Then visit `http://localhost:8000` in your browser.
 Download the latest database backup: https://drive.google.com/file/d/1tcNZ2MRAvo1QgKhK8Eh9WVrDgaFItKge/view?usp=drive_link
 
 To restore the database from backup:
-```
+
+​```
 ./scripts/restore.sh course_advisor_db_2026-04-26_03-21-28.sql
 ​```
 
 To create a new backup:
-```
+
+​```
 ./scripts/backup.sh
 ​```
