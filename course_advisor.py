@@ -115,7 +115,7 @@ Rules:
     EMBEDDING_MODEL  = "gemini-embedding-001"
     GENERATION_MODEL = "gemini-3-flash-preview"
     PLANNER_MODEL    = "gemini-3-flash-preview"   # same value; swap independently
-    TOP_K            = 2
+    TOP_K            = 3
 
     _POOL_MIN_CONN      = 2
     _POOL_MAX_CONN      = 10
