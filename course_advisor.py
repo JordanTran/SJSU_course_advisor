@@ -83,7 +83,7 @@ fences, no explanation, no preamble — with exactly this structure:
       "id": "#E1",
       "tool": "retrieve_syllabus_chunks",
       "args": {
-        "query": "<semantic search query>",
+        "query": "<semantic search query, e.g. 'course assignments', NOT a question>",
         "subject": "<optional subject code, e.g. CS, MATH>",
         "catalog_number": "<optional catalog number, e.g. 146, 101W>",
         "instructor": "<optional partial instructor name>",
@@ -102,7 +102,11 @@ Rules:
 - A later step's "query" value may contain a prior step id as a placeholder
   (e.g. "#E1") if that step's retrieved content should inform the follow-up query.
   The worker will substitute the placeholder before executing the step.
-- Produce the minimum number of steps needed to gather complete information.
+- Produce ONE step per distinct information need in the question.  If the
+  student asks about three separate topics (e.g. course content, grading, and
+  projects), emit three steps with one focused query each.  Never merge multiple
+  information needs into a single query; a combined query dilutes recall for
+  every topic it covers.
 - Output ONLY the JSON object, with absolutely no other text.
 """
 
@@ -111,7 +115,7 @@ Rules:
     EMBEDDING_MODEL  = "gemini-embedding-001"
     GENERATION_MODEL = "gemini-3-flash-preview"
     PLANNER_MODEL    = "gemini-3-flash-preview"   # same value; swap independently
-    TOP_K            = 5
+    TOP_K            = 2
 
     _POOL_MIN_CONN      = 2
     _POOL_MAX_CONN      = 10
