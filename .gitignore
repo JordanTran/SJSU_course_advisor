@@ -36,3 +36,6 @@ desktop.ini
 # Logs
 *.log
 backups/
+
+#CSVs
+*.csv
