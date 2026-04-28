@@ -50,7 +50,6 @@ app.add_middleware(
 
 class QuestionRequest(BaseModel):
     question: str
-    course_name: str
 
 
 class AnswerResponse(BaseModel):
@@ -63,7 +62,7 @@ class AnswerResponse(BaseModel):
 async def ask(payload: QuestionRequest) -> AnswerResponse:
     """Ask the course advisor a question grounded in the syllabi for a given course."""
     try:
-        answer = await advisor.ask(payload.question, payload.course_name)
+        answer = await advisor.ask(payload.question)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
