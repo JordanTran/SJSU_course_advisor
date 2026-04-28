@@ -199,6 +199,26 @@ Rules:
             thinking_level="medium", # some reasoning useful for multi-chunk synthesis
         )
 
+        # ── Helper: extract text from LangChain response ──────────────────────
+
+        def _extract_text(content) -> str:
+            """
+            Normalize a LangChain response content value to a plain string.
+
+            When thinking_level is set, Gemini returns a list of typed blocks
+            (e.g. {"type": "thinking", ...}, {"type": "text", "text": "..."}).
+            When thinking is disabled the value is already a plain string.
+            This helper handles both cases so callers can always do .strip().
+            """
+            if isinstance(content, str):
+                return content
+            # content is a list of dicts — concatenate all "text" blocks.
+            return "".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+
         # ── Node: planner ─────────────────────────────────────────────────────
 
         async def planner_node(state: ReWOOState) -> dict:
@@ -211,7 +231,7 @@ Rules:
                 HumanMessage(content=state["question"]),
             ]
             response = await planner_llm.ainvoke(messages)
-            raw = response.content.strip()
+            raw = _extract_text(response.content).strip()
             # Defensively strip accidental markdown fences the model may emit.
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```\s*$",        "", raw)
@@ -327,7 +347,7 @@ Rules:
                 HumanMessage(content=user_prompt),
             ]
             response = await solver_llm.ainvoke(messages)
-            return {"answer": response.content.strip()}
+            return {"answer": _extract_text(response.content).strip()}
 
         # ── Graph assembly ────────────────────────────────────────────────────
         graph = StateGraph(ReWOOState)
