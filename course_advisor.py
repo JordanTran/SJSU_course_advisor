@@ -367,20 +367,145 @@ Rules:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    async def ask(self, question: str) -> str:
+    async def ask(self, question: str, verbose: bool = False) -> str:
         """
         Run the full ReWOO pipeline for a student question.
 
         Course identification (subject, catalog number, etc.) is now entirely
         the agent's responsibility — the caller passes only the raw question.
+
+        Set verbose=True to print each node's output as it completes:
+          • Planner  — the full retrieval plan (steps + args)
+          • Worker   — every retrieved chunk per evidence key
+          • Solver   — the final answer
         """
-        result = await self._graph.ainvoke({
+        initial_state = {
             "question": question,
             "plan":     [],
             "evidence": {},
             "answer":   "",
-        })
-        return result["answer"]
+        }
+
+        if not verbose:
+            result = await self._graph.ainvoke(initial_state)
+            return result["answer"]
+
+        # ── Verbose: astream_events gives per-LLM-call granularity ──────────────
+        # Event types we handle:
+        #   on_chain_start        — a LangGraph node is beginning
+        #   on_chat_model_start   — an LLM call is about to be made (shows prompt)
+        #   on_chat_model_end     — an LLM call finished (shows raw response)
+        #   on_chain_end          — a node finished (shows its state delta)
+
+        _WIDE    = "━" * 60
+        _DIVIDER = "─" * 60
+
+        def _fmt_messages(messages: list) -> None:
+            """Pretty-print a list of LangChain message dicts or objects."""
+            for msg in messages:
+                if isinstance(msg, dict):
+                    role    = msg.get("type", msg.get("role", "?")).upper()
+                    content = msg.get("text", msg.get("content", ""))
+                elif hasattr(msg, "type") and hasattr(msg, "content"):
+                    role    = msg.type.upper()
+                    content = msg.content
+                else:
+                    role, content = "MSG", str(msg)
+
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+
+                indented = str(content).replace("\n", "\n    ")
+                print(f"  [{role}]\n    {indented}\n")
+
+        def _fmt_chunks(evidence: dict) -> None:
+            """Print retrieved chunks from a worker state delta."""
+            for eid, chunks in sorted(evidence.items()):
+                if not isinstance(chunks, list):
+                    continue
+                print(f"\n  {eid}  →  {len(chunks)} chunk{'s' if len(chunks) != 1 else ''} retrieved")
+                print(_DIVIDER)
+                for i, c in enumerate(chunks, 1):
+                    print(
+                        f"  [{i}] {c.get('subject','?')}) {c.get('catalog_number','?')}"
+                        f" — {c.get('chunk_title','(no title)')}"
+                        f"  |  {c.get('session','?')}) {c.get('year','?')}"
+                        f"  |  {c.get('instructor','?')}"
+                    )
+                    text    = c.get("chunk_text", "")
+                    preview = text[:400].replace("\n", "\n       ")
+                    if len(text) > 400:
+                        preview += f"  … [{len(text) - 400} more chars]"
+                    print(f"       {preview}\n")
+
+        _NODE_LABELS = {"planner": "PLANNER", "worker": "WORKER", "solver": "SOLVER"}
+        final_answer = ""
+
+        async for event in self._graph.astream_events(initial_state, version="v2"):
+            kind = event["event"]
+            name = event.get("name", "")
+            data = event.get("data", {})
+
+            # ── Node starting ─────────────────────────────────────────────────
+            if kind == "on_chain_start" and name in _NODE_LABELS:
+                print(f"\n{_WIDE}")
+                print(f"  ▶ {_NODE_LABELS[name]} starting")
+                print(_WIDE)
+
+            # ── LLM call: prompt ──────────────────────────────────────────────
+            elif kind == "on_chat_model_start":
+                batches  = data.get("input", {}).get("messages", [[]])
+                messages = batches[0] if batches else []
+                print(f"\n  ┌─ LLM CALL  ({name})  —  {len(messages)} message(s)")
+                print(f"  └{'─' * 50}")
+                _fmt_messages(messages)
+
+            # ── LLM call: response ────────────────────────────────────────────
+            elif kind == "on_chat_model_end":
+                raw = data.get("output", {})
+                try:
+                    content = raw.generations[0][0].message.content
+                except (AttributeError, IndexError):
+                    content = str(raw)
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                preview = str(content)[:600].replace("\n", "\n    ")
+                if len(str(content)) > 600:
+                    preview += f"  … [{len(str(content)) - 600} more chars]"
+                print(f"  ┌─ LLM RESPONSE  ({name})")
+                print(f"  └{'─' * 50}")
+                print(f"    {preview}\n")
+
+            # ── Node finished ─────────────────────────────────────────────────
+            elif kind == "on_chain_end" and name in _NODE_LABELS:
+                output = data.get("output", {})
+                if name == "planner":
+                    plan = output.get("plan", [])
+                    print(f"\n  ✔ PLANNER  →  {len(plan)} step(s)")
+                    for step in plan:
+                        print(f"    {step['id']}  tool={step['tool']}")
+                        for k, v in step.get("args", {}).items():
+                            print(f"         {k}: {v!r}")
+                    print(_DIVIDER)
+                elif name == "worker":
+                    evidence = output.get("evidence", {})
+                    print(f"\n  ✔ WORKER  →  {len(evidence)} evidence key(s)")
+                    _fmt_chunks(evidence)
+                    print(_DIVIDER)
+                elif name == "solver":
+                    final_answer = output.get("answer", "")
+                    print(f"\n  ✔ SOLVER answer:")
+                    print(_DIVIDER)
+                    print(final_answer)
+                    print(_WIDE)
+
+        return final_answer
 
     # ── Retry ─────────────────────────────────────────────────────────────────
 

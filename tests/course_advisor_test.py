@@ -14,11 +14,10 @@ async def test_course_advisor():
     advisor = CourseAdvisor()
     await advisor.setup()
     try:
-        question = "What topics are covered in CMPE 180B and how are you assessed?"
+        question = "What topics are covered in CMPE 180B? How are you assessed? Is there a project?"
 
         print(f"Q: {question}")
-        answer = await advisor.ask(question)
-        print(f"A: {answer}\n")
+        await advisor.ask(question, verbose=True)
     finally:
         await advisor.close()
 
