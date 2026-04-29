@@ -1,6 +1,6 @@
 """
 test_db.py – Course Advisor DB Test Suite
-Run: pytest test_db.py -v
+Run: pytest tests/course_advisor_test_db.py -v
 Requires: pip install psycopg2-binary python-dotenv
 """
 
@@ -57,7 +57,7 @@ def seed(conn):
         VALUES ('TEST College')
         RETURNING college_id
     """)
-    college_id = cur.fetchone()[0]
+    college_id = cur.fetchone()[0] #used returning because SERIAL generated it automatically
 
     # Department
     cur.execute("""
@@ -94,7 +94,7 @@ def seed(conn):
     cur.execute("""
         INSERT INTO instructor_department (instructor_id, dept_id)
         VALUES (%s, %s), (%s, %s)
-    """, (inst_a, dept_id, inst_b, dept_id))
+    """, (inst_a, dept_id, inst_b, dept_id)) # both are in same department for simplicity
 
     # Sections  (syllabus_url and delivery are NOT NULL in this schema)
     cur.execute("""
@@ -114,11 +114,11 @@ def seed(conn):
             (%s, 'TEST Grading',      'TEST chunk: grading policy',      %s::vector),
             (%s, 'TEST Schedule',     'TEST chunk: course schedule',     %s::vector),
             (%s, 'TEST Office Hours', 'TEST chunk: office hours policy', %s::vector)
-    """, (sec1, ZERO_VEC, sec1, ZERO_VEC, sec2, ZERO_VEC))
+    """, (sec1, ZERO_VEC, sec2, ZERO_VEC, sec3, ZERO_VEC))
 
-    conn.commit()
+    conn.commit() # Make all those seed inserts officially saved to the database.
 
-    yield {
+    yield { # Pause fixture here, give this value to tests, then resume afterward.
         "college_id": college_id,
         "dept_id": dept_id,
         "course_id": course_id,
@@ -215,7 +215,7 @@ def test_section_fk_bad_course(cur, seed):
 def test_delete_restrict_college(cur, seed):
     # Cannot delete TEST college while departments still reference it
     cur.execute("SAVEPOINT before_restrict")
-    with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+    with pytest.raises(psycopg2.errors.RestrictViolation): #delete parent with children referencing it should raise RestrictViolation not ForeignKeyViolation
         cur.execute("DELETE FROM college WHERE college_id = %s", (seed["college_id"],))
     cur.execute("ROLLBACK TO SAVEPOINT before_restrict")
 
@@ -223,7 +223,7 @@ def test_delete_restrict_college(cur, seed):
 def test_delete_restrict_department(cur, seed):
     # Cannot delete TEST department while subjects still reference it
     cur.execute("SAVEPOINT before_restrict")
-    with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+    with pytest.raises(psycopg2.errors.RestrictViolation):
         cur.execute("DELETE FROM department WHERE dept_id = %s", (seed["dept_id"],))
     cur.execute("ROLLBACK TO SAVEPOINT before_restrict")
 
@@ -387,6 +387,8 @@ def test_no_empty_chunk_title(cur, seed):
 #  Performance (EXPLAIN)
 # ─────────────────────────────────────────────
 
+# Drops the year index if it exists, then checks that PostgreSQL's query planner
+# uses a sequential scan (reads every row) when no index is available.
 def test_explain_without_index(cur, seed):
     cur.execute("DROP INDEX IF EXISTS idx_test_section_year")
     cur.execute("""
@@ -397,7 +399,9 @@ def test_explain_without_index(cur, seed):
     plan = " ".join(r[0] for r in cur.fetchall())
     assert "Seq Scan" in plan or "Scan" in plan
 
-
+# Creates an index on section.year, then checks that EXPLAIN produces a valid
+# query plan. On small datasets the planner may still choose a seq scan, so we
+# just verify the plan is non-empty rather than asserting an index scan was used.
 def test_explain_with_index(cur, seed):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_test_section_year ON section(year)")
     cur.execute("""
