@@ -21,7 +21,9 @@ Create the database and load the schema:
 
 ``` bash
 psql -U postgres -c "CREATE DATABASE course_advisor;"
+psql -U postgres -c "CREATE DATABASE course_advisor_test;"
 psql -U postgres -d course_advisor -f course_advisor_db.sql
+psql -U postgres -d course_advisor_test -f course_advisor_db_test.sql
 ```
 
 ---
