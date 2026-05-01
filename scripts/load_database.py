@@ -179,6 +179,37 @@ def insert_syllabus_chunks(cur, df: pd.DataFrame, section_map: dict):
 
 
 # ─────────────────────────────────────────────
+#  Indexing Logic
+# ─────────────────────────────────────────────
+def apply_indexes(cur):
+    """Applies performance indexes after data has been loaded."""
+    print("\nApplying indexes for performance optimization...")
+    
+    # Boost memory for index creation to prevent disk spill during HNSW build
+    cur.execute("SET maintenance_work_mem = '256MB';")
+
+    indexes = [
+        # HNSW for Vector Similarity
+        """
+        CREATE INDEX IF NOT EXISTS idx_syllabus_embedding_hnsw 
+        ON syllabus_chunk USING hnsw (embedding vector_cosine_ops);
+        """,
+        # Foreign Keys and Lookups
+        "CREATE INDEX IF NOT EXISTS idx_chunk_section_id ON syllabus_chunk(section_id);",
+        "CREATE INDEX IF NOT EXISTS idx_section_course_id ON section(course_id);",
+        "CREATE INDEX IF NOT EXISTS idx_section_instructor_id ON section(instructor_id);",
+        "CREATE INDEX IF NOT EXISTS idx_section_lookup ON section(year, session, section);"
+    ]
+
+    for idx_sql in indexes:
+        try:
+            cur.execute(idx_sql)
+            print(f"Applied: {idx_sql.split('ON')[0].strip()}")
+        except Exception as e:
+            print(f"Warning: Could not apply index: {e}")
+
+
+# ─────────────────────────────────────────────
 #  Validate
 # ─────────────────────────────────────────────
 def validate(cur, df: pd.DataFrame):
@@ -296,6 +327,10 @@ def main():
         conn.commit()
 
         insert_syllabus_chunks(cur, df, section_map)
+        conn.commit()
+
+        # Apply indexes after ingestion is complete
+        apply_indexes(cur)
         conn.commit()
 
         print("\nValidating...")
