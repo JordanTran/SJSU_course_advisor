@@ -1,59 +1,79 @@
-import psycopg2
+import asyncio
 import os
 import json
+import asyncpg
+from pathlib import Path
 from dotenv import load_dotenv
+from pgvector.asyncpg import register_vector
 
-load_dotenv()
+# Setup Paths
+BASE_DIR = Path(__file__).parent
+ENV_PATH = BASE_DIR.parent / '.env'
+SQL_PATH = BASE_DIR / 'indexing_tests.sql'
 
-def get_real_vector(cur):
-    """Fetch a real vector from your DB to ensure the HNSW index is actually traversed."""
-    cur.execute("SELECT embedding FROM syllabus_chunk LIMIT 1")
-    return cur.fetchone()[0]
+load_dotenv(dotenv_path=ENV_PATH)
 
-def run_benchmark():
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        dbname=os.getenv("DB_NAME", "course_advisor"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
-    conn.autocommit = True
-    cur = conn.cursor()
+async def run_benchmark():
+    # 1. Connect using asyncpg (Avoids psycopg2/cmake issues)
+    try:
+        conn = await asyncpg.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        await register_vector(conn)
+    except Exception as e:
+        print(f"Connection Error: {e}")
+        return
 
-    # Get a real vector for the test
-    vector = get_real_vector(cur)
-    
-    # Read the SQL file
-    sql_path = os.path.join(os.path.dirname(__file__), "performance_tests.sql")
-    with open(sql_path, 'r') as f:
-        sql_commands = f.read().split(';')
+    # 2. Get Test Data
+    row = await conn.fetchrow("SELECT embedding FROM syllabus_chunk LIMIT 1")
+    if not row:
+        print("No data in syllabus_chunk table.")
+        return
+    test_vector = row['embedding']
 
-    print(f"{'QUERY SCENARIO':<35} | {'TIME':<10} | {'STRATEGY'}")
-    print("-" * 70)
+    # 3. Read and Split SQL file
+    with open(SQL_PATH, 'r') as f:
+        # Split by semicolon and ignore comments/empty lines
+        content = f.read()
+        commands = [c.strip() for c in content.split(';') if c.strip() and not c.startswith('--')]
 
-    for cmd in sql_commands:
-        clean_cmd = cmd.strip()
-        if not clean_cmd: continue
+    print(f"\n{'TEST SCENARIO':<35} | {'EXECUTION TIME':<15} | {'NODE TYPE'}")
+    print("-" * 80)
 
-        # Handle Vector Search Commands (Injecting the real vector)
-        if "ORDER BY embedding <=>" in clean_cmd:
-            label = "Vector Search (Index)" if "idx_hnsw_embedding" in sql_commands[sql_commands.index(cmd)-1] else "Vector Search (Baseline)"
-            cur.execute(clean_cmd, (vector,))
-            plan = cur.fetchone()[0][0]
-            print(f"{label:<35} | {plan['Execution Time']:>7.2f}ms | {plan['Plan']['Node Type']}")
+    for cmd in commands:
+        try:
+            # Handle Vector Search Tests
+            if "ORDER BY embedding <=>" in cmd:
+                # Determine label based on context
+                label = "Vector Search (Optimized)" if "idx_hnsw_embedding" in cmd else "Vector Search (Baseline)"
+                
+                # Replace %s with $1 for asyncpg
+                stmt = cmd.replace("%s", "$1")
+                raw_plan = await conn.fetchval(stmt, test_vector)
+                plan = json.loads(raw_plan)[0]
+                
+                print(f"{label:<35} | {plan['Execution Time']:>10.2f} ms | {plan['Plan']['Node Type']}")
 
-        # Handle the Join Query
-        elif "JOIN section" in clean_cmd:
-            cur.execute(clean_cmd)
-            plan = cur.fetchone()[0][0]
-            print(f"{'Complex Relational Join':<35} | {plan['Execution Time']:>7.2f}ms | {plan['Plan']['Node Type']}")
-        
-        # Execute Setup/Drop/Create commands quietly
-        else:
-            cur.execute(clean_cmd)
+            # Handle Join Test
+            elif "JOIN section" in cmd:
+                raw_plan = await conn.fetchval(cmd)
+                plan = json.loads(raw_plan)[0]
+                print(f"{'Complex Relational Join':<35} | {plan['Execution Time']:>10.2f} ms | {plan['Plan']['Node Type']}")
 
-    cur.close()
-    conn.close()
+            # Handle Setup (CREATE/DROP INDEX)
+            else:
+                await conn.execute(cmd)
+                if "CREATE INDEX" in cmd:
+                    name = cmd.split("INDEX ")[1].split(" ")[0]
+                    print(f"Index Created: {name}")
+
+        except Exception as e:
+            print(f"Query Error: {e}")
+
+    await conn.close()
 
 if __name__ == "__main__":
-    run_benchmark()
+    asyncio.run(run_benchmark())
