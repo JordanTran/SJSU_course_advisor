@@ -137,19 +137,3 @@ CREATE TABLE syllabus_chunk (
         REFERENCES section (section_id)
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-
--- ─────────────────────────────────────────────
---  8. INDEXES for Performance Optimization
--- ─────────────────────────────────────────────
-
--- 1. HNSW for Vector Similarity (Critical for RAG performance)
-CREATE INDEX idx_syllabus_embedding_hnsw 
-ON syllabus_chunk USING hnsw (embedding vector_cosine_ops);
-
--- 2. Foreign Keys (Speeds up multi-table JOINs)
-CREATE INDEX idx_chunk_section_id ON syllabus_chunk(section_id);
-CREATE INDEX idx_section_course_id ON section(course_id);
-CREATE INDEX idx_section_instructor_id ON section(instructor_id);
-
--- 3. Composite Search Index (Speeds up section filtering)
-CREATE INDEX idx_section_lookup ON section(year, session, section);

@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-INPUT_CSV  = os.path.join(BASE_DIR, "chunks_with_embeddings.csv")
-SQL_FILE   = os.path.join(BASE_DIR, "course_advisor_db.sql")
+BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
+INPUT_CSV      = os.path.join(BASE_DIR, "chunks_with_embeddings.csv")
+INDEX_SQL_FILE = os.path.join(BASE_DIR, "course_advisor_db_indexing.sql")
 
 # ─────────────────────────────────────────────
 #  Connection
@@ -171,23 +171,22 @@ def insert_syllabus_chunks(cur, df: pd.DataFrame, section_map: dict):
 
 
 # ─────────────────────────────────────────────
-#  Indexing Logic (Using SQL file)
+#  Indexing Logic (Using external SQL file)
 # ─────────────────────────────────────────────
 def apply_indexes(cur):
-    print(f"\nApplying indexes from {os.path.basename(SQL_FILE)}...")
+    if not os.path.exists(INDEX_SQL_FILE):
+        print(f"Warning: Indexing file {INDEX_SQL_FILE} not found. Skipping indexing.")
+        return
+
+    print(f"\nApplying indexes from {os.path.basename(INDEX_SQL_FILE)}...")
+    # Increase maintenance memory for heavy HNSW index building
     cur.execute("SET maintenance_work_mem = '256MB';")
     
-    with open(SQL_FILE, 'r') as f:
-        # Split by semicolon and execute only lines containing CREATE INDEX
-        commands = [c.strip() for c in f.read().split(';') if "CREATE INDEX" in c.upper()]
-    
-    for cmd in commands:
-        if cmd:
-            cur.execute(cmd)
-            # Log the index name from the command string
-            if "INDEX" in cmd.upper():
-                idx_name = cmd.split("INDEX")[1].split("ON")[0].strip().replace("IF NOT EXISTS ", "")
-                print(f"Applied: {idx_name}")
+    with open(INDEX_SQL_FILE, 'r') as f:
+        sql_commands = f.read()
+        if sql_commands.strip():
+            cur.execute(sql_commands)
+            print("Successfully applied indexes from SQL file.")
 
 
 # ─────────────────────────────────────────────
@@ -249,11 +248,10 @@ def validate(cur, df: pd.DataFrame):
     print(f"Unique sections in CSV : {len(csv_sections)}")
     print(f"Sections in DB         : {len(db_df)}")
 
-    total_csv_chunks = df.shape[0]
     cur.execute("SELECT COUNT(*) FROM syllabus_chunk")
     total_db_chunks = cur.fetchone()[0]
-    print(f"Total chunks in CSV    : {total_csv_chunks}")
     print(f"Total chunks in DB     : {total_db_chunks}")
+    print(f"Total chunks in CSV    : {len(df)}")
 
     merge_cols = section_keys + ["chunk_count"]
     missing = (
