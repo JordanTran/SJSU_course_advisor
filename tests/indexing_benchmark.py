@@ -6,13 +6,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pgvector.asyncpg import register_vector
 
+# Import Rich components for a professional terminal UI
+from rich.console import Console
+from rich.table import Table
+
 # ── Config ────────────────────────────────────────────────────────────────────
-# Use absolute paths to ensure SQL and .env files are found reliably
 BASE_DIR       = Path(__file__).resolve().parent
 INDEX_SQL_PATH = BASE_DIR / "indexing_tests.sql"
 ENV_PATH       = BASE_DIR.parent / ".env"
 
 load_dotenv(dotenv_path=ENV_PATH)
+console = Console()
 
 async def get_db_conn(db_name):
     conn = await asyncpg.connect(
@@ -25,23 +29,21 @@ async def get_db_conn(db_name):
     return conn
 
 async def run_individual_tests():
-    # Ensure the SQL file exists before proceeding
     if not INDEX_SQL_PATH.exists():
-        print(f"Error: Required test file not found at {INDEX_SQL_PATH}")
+        console.print(f"[bold red]Error:[/bold red] Required test file not found at {INDEX_SQL_PATH}")
         return
 
     idx_conn = await get_db_conn("course_advisor")
     unidx_conn = await get_db_conn("course_advisor_test")
 
     try:
-        # Get a real test vector from the database for the HNSW similarity search
+        # Get a real test vector
         row = await idx_conn.fetchrow("SELECT embedding FROM syllabus_chunk LIMIT 1")
         if not row:
-            print("Error: No data found in 'course_advisor' to run benchmarks.")
+            console.print("[bold yellow]Warning:[/bold yellow] No data found to run benchmarks.")
             return
         test_vector = row['embedding']
 
-        # Define the mapping of queries to the index they test
         tests = [
             ("HNSW (Vector Search)", "idx_syllabus_embedding_hnsw"),
             ("FK: Chunk -> Section", "idx_chunk_section_id"),
@@ -50,39 +52,51 @@ async def run_individual_tests():
             ("Composite: Section Lookup", "idx_section_lookup")
         ]
 
-        # Read and parse the EXPLAIN queries from the SQL file
         with open(INDEX_SQL_PATH, 'r') as f:
-            # Split queries by semicolon and filter for EXPLAIN statements
             queries = [q.strip() for q in f.read().split(';') if "EXPLAIN" in q]
 
-        print(f"\n{'INDEX UNDER TEST':<30} | {'UNINDEXED (ms)':<15} | {'INDEXED (ms)':<15} | {'SPEEDUP'}")
-        print("-" * 85)
+        # Create a Rich Table similar to the concurrency test
+        table = Table(title="\nIndexing Performance Benchmark", header_style="bold cyan")
+        table.add_column("Index Under Test", style="dim", width=30)
+        table.add_column("Unindexed (ms)", justify="right")
+        table.add_column("Indexed (ms)", justify="right")
+        table.add_column("Speedup", justify="right", style="bold green")
 
         for i, query in enumerate(queries):
-            # Boundary check to prevent IndexError if SQL file has more queries than defined in 'tests'
             if i >= len(tests):
                 break
 
-            label, index_name = tests[i]
-            
-            # Format query for asyncpg parameters ($1) instead of psql placeholders (%s)
+            label, _ = tests[i]
             stmt = query.replace("%s", "$1")
             args = [test_vector] if "$1" in stmt else []
 
-            # Execute on the unindexed baseline database
+            # Execute benchmarks
             res_un = await unidx_conn.fetchval(stmt, *args)
             time_un = json.loads(res_un)[0]['Execution Time']
 
-            # Execute on the indexed production database
             res_idx = await idx_conn.fetchval(stmt, *args)
             time_idx = json.loads(res_idx)[0]['Execution Time']
 
-            # Calculate speedup factor
             speedup = time_un / time_idx if time_idx > 0 else 0
-            print(f"{label:<30} | {time_un:>14.2f} | {time_idx:>13.2f} | {speedup:.1f}x")
+            
+            # Format speedup color based on performance gain
+            speedup_str = f"{speedup:.1f}x"
+            if speedup < 1.5:
+                speedup_str = f"[yellow]{speedup_str}[/yellow]"
+            elif speedup > 10:
+                speedup_str = f"[bold green]{speedup_str}[/bold green]"
+
+            table.add_row(
+                label, 
+                f"{time_un:.2f}", 
+                f"{time_idx:.2f}", 
+                speedup_str
+            )
+
+        console.print(table)
 
     except Exception as e:
-        print(f"An error occurred during benchmark: {e}")
+        console.print(f"[bold red]An error occurred:[/bold red] {e}")
     finally:
         await idx_conn.close()
         await unidx_conn.close()
