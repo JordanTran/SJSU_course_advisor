@@ -582,78 +582,109 @@ Rules:
         """
         Embed the question, then fetch the top-K most similar syllabus chunks.
 
-        Optional filters narrow the WHERE clause before vector ranking.
-        The DB connection is held only for the duration of the query and
-        immediately returned to the pool — never held across LLM calls.
-        asyncpg passes the numpy embedding directly as a pgvector parameter
-        (registered via the init callback in setup()), so no manual string
-        serialisation is needed.
+        Filters are applied in a CTE that returns only chunk IDs. The outer query
+        joins back to the physical syllabus_chunk table and performs the vector
+        ORDER BY there, which lets pgvector use the HNSW index instead of ranking
+        over a materialized derived table.
+
+        The connection is held only for the query and returned before any LLM work.
         """
         embedding = await self._embed_query(question)
 
-        # Build a dynamic parameterised WHERE clause.
-        # $1 is always the embedding vector; the LIMIT param is last.
         conditions: list[str] = []
-        params: list[Any]     = [embedding]   # $1
-        p = 2                                  # next param index
+        params: list[Any] = [embedding]  # $1
+        p = 2
 
         if subject:
             conditions.append(f"c.subject = ${p}")
             params.append(subject)
             p += 1
+
         if catalog_number:
             conditions.append(f"c.catalog_number = ${p}")
             params.append(catalog_number)
             p += 1
+
         if instructor:
             conditions.append(f"i.instructor_name ILIKE ${p}")
             params.append(f"%{instructor}%")
             p += 1
+
         if section:
             conditions.append(f"s.section = ${p}")
             params.append(section)
             p += 1
+
         if delivery:
             conditions.append(f"s.delivery = ${p}")
             params.append(delivery)
             p += 1
+
         if year is not None:
             conditions.append(f"s.year = ${p}")
             params.append(year)
             p += 1
+
         if session:
             conditions.append(f"s.session = ${p}")
             params.append(session)
             p += 1
 
-        where_clause  = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        limit_param   = f"${p}"
+        limit_param = f"${p}"
         params.append(self.TOP_K)
 
-        sql = f"""
-            SELECT
-                sc.chunk_id,
-                sc.chunk_title,
-                sc.chunk_text,
-                c.subject,
-                c.catalog_number,
-                s.course_title,
-                s.units,
-                s.session,
-                s.year,
-                s.section,
-                s.delivery,
-                s.syllabus_url,
-                i.instructor_name,
-                1 - (sc.embedding <=> $1) AS similarity
-            FROM syllabus_chunk sc
-            JOIN section s    ON s.section_id    = sc.section_id
-            JOIN course c     ON c.course_id     = s.course_id
-            JOIN instructor i ON i.instructor_id = s.instructor_id
-            {where_clause}
-            ORDER BY sc.embedding <=> $1
-            LIMIT {limit_param};
+        select_cols = """
+            sc.chunk_id,
+            sc.chunk_title,
+            sc.chunk_text,
+            c.subject,
+            c.catalog_number,
+            s.course_title,
+            s.units,
+            s.session,
+            s.year,
+            s.section,
+            s.delivery,
+            s.syllabus_url,
+            i.instructor_name,
+            1 - (sc.embedding <=> $1) AS similarity
         """
+
+        # No filters: keep the query as a pure vector search so HNSW can drive
+        # the ORDER BY directly.
+        if not conditions:
+            sql = f"""
+                SELECT
+                    {select_cols}
+                FROM syllabus_chunk sc
+                JOIN section    s ON s.section_id     = sc.section_id
+                JOIN course     c ON c.course_id      = s.course_id
+                JOIN instructor i ON i.instructor_id  = s.instructor_id
+                ORDER BY sc.embedding <=> $1
+                LIMIT {limit_param};
+            """
+        else:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+            sql = f"""
+                WITH filtered_ids AS (
+                    SELECT sc.chunk_id
+                    FROM syllabus_chunk sc
+                    JOIN section    s ON s.section_id     = sc.section_id
+                    JOIN course     c ON c.course_id      = s.course_id
+                    JOIN instructor i ON i.instructor_id  = s.instructor_id
+                    {where_clause}
+                )
+                SELECT
+                    {select_cols}
+                FROM syllabus_chunk sc
+                JOIN filtered_ids fi ON fi.chunk_id       = sc.chunk_id
+                JOIN section      s  ON s.section_id      = sc.section_id
+                JOIN course       c  ON c.course_id       = s.course_id
+                JOIN instructor   i  ON i.instructor_id   = s.instructor_id
+                ORDER BY sc.embedding <=> $1
+                LIMIT {limit_param};
+            """
 
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
@@ -673,7 +704,7 @@ Rules:
                 "delivery":       row["delivery"],
                 "syllabus_url":   row["syllabus_url"],
                 "instructor":     row["instructor_name"],
-                "similarity":     row["similarity"],   # stripped before leaving the tool
+                "similarity":     row["similarity"],
             }
             for row in rows
         ]

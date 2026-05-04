@@ -137,7 +137,3 @@ CREATE TABLE syllabus_chunk (
         REFERENCES section (section_id)
         ON UPDATE CASCADE ON DELETE CASCADE
 );
-
--- ─────────────────────────────────────────────
---  Indexes (TODO)
--- ─────────────────────────────────────────────

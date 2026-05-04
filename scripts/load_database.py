@@ -6,23 +6,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-INPUT_CSV  = os.path.join(BASE_DIR, "chunks_with_embeddings.csv")
-
-DB_CONFIG = {
-    "host":     os.getenv("DB_HOST", "localhost"),
-    "port":     os.getenv("DB_PORT", 5432),
-    "dbname":   os.getenv("DB_NAME", "your_db"),
-    "user":     os.getenv("DB_USER", "your_user"),
-    "password": os.getenv("DB_PASSWORD", "your_password"),
-}
-
+BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
+INPUT_CSV      = os.path.join(BASE_DIR, "chunks_with_embeddings.csv")
+INDEX_SQL_FILE = os.path.join(BASE_DIR, "course_advisor_db_indexing.sql")
 
 # ─────────────────────────────────────────────
 #  Connection
 # ─────────────────────────────────────────────
-def get_connection():
-    return psycopg2.connect(**DB_CONFIG)
+def get_connection(dbname):
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        port=os.getenv("DB_PORT", 5432),
+        dbname=dbname,
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+    )
 
 
 # ─────────────────────────────────────────────
@@ -115,10 +113,6 @@ def insert_instructor_departments(cur, df: pd.DataFrame, instructor_map: dict, d
 
 
 def insert_sections(cur, df: pd.DataFrame, instructor_map: dict) -> dict:
-    """
-    Insert unique sections (deduplicated from chunk-level rows).
-    Returns section_map: (course_id, year, session, section) -> section_id
-    """
     cur.execute("SELECT subject, catalog_number, course_id FROM course")
     course_map = {(subj, cat): cid for subj, cat, cid in cur.fetchall()}
 
@@ -151,7 +145,6 @@ def insert_sections(cur, df: pd.DataFrame, instructor_map: dict) -> dict:
     ])
     print(f"Inserted {len(sections)} sections")
 
-    # Build section_map for use by insert_syllabus_chunks
     cur.execute("SELECT course_id, year, session, section, section_id FROM section")
     section_map = {
         (cid, yr, sess, sec): sid
@@ -161,7 +154,6 @@ def insert_sections(cur, df: pd.DataFrame, instructor_map: dict) -> dict:
 
 
 def insert_syllabus_chunks(cur, df: pd.DataFrame, section_map: dict):
-    """Insert every row as a syllabus chunk, linked to its section."""
     cur.execute("SELECT subject, catalog_number, course_id FROM course")
     course_map = {(subj, cat): cid for subj, cat, cid in cur.fetchall()}
 
@@ -176,6 +168,25 @@ def insert_syllabus_chunks(cur, df: pd.DataFrame, section_map: dict):
         VALUES %s
     """, rows, template="(%s, %s, %s, %s::vector)", page_size=1000)
     print(f"Inserted {len(rows)} syllabus chunks")
+
+
+# ─────────────────────────────────────────────
+#  Indexing Logic (Using external SQL file)
+# ─────────────────────────────────────────────
+def apply_indexes(cur):
+    if not os.path.exists(INDEX_SQL_FILE):
+        print(f"Warning: Indexing file {INDEX_SQL_FILE} not found. Skipping indexing.")
+        return
+
+    print(f"\nApplying indexes from {os.path.basename(INDEX_SQL_FILE)}...")
+    # Increase maintenance memory for heavy HNSW index building
+    cur.execute("SET maintenance_work_mem = '256MB';")
+    
+    with open(INDEX_SQL_FILE, 'r') as f:
+        sql_commands = f.read()
+        if sql_commands.strip():
+            cur.execute(sql_commands)
+            print("Successfully applied indexes from SQL file.")
 
 
 # ─────────────────────────────────────────────
@@ -217,13 +228,8 @@ def validate(cur, df: pd.DataFrame):
             "dept_name", "subject_name", "college_name", "chunk_count"]
     db_df = pd.DataFrame(cur.fetchall(), columns=cols)
 
-    # Chunk counts from CSV
     section_keys = ["subject", "catalog_number", "year", "session", "section"]
-    csv_chunks = (
-        df.groupby(section_keys)
-          .size()
-          .reset_index(name="chunk_count")
-    )
+    csv_chunks = df.groupby(section_keys).size().reset_index(name="chunk_count")
     csv_sections = (
         df[section_keys + ["course_title", "units", "instructor_name",
                            "syllabus_url", "delivery", "dept_name",
@@ -242,11 +248,10 @@ def validate(cur, df: pd.DataFrame):
     print(f"Unique sections in CSV : {len(csv_sections)}")
     print(f"Sections in DB         : {len(db_df)}")
 
-    total_csv_chunks = df.shape[0]
     cur.execute("SELECT COUNT(*) FROM syllabus_chunk")
     total_db_chunks = cur.fetchone()[0]
-    print(f"Total chunks in CSV    : {total_csv_chunks}")
     print(f"Total chunks in DB     : {total_db_chunks}")
+    print(f"Total chunks in CSV    : {len(df)}")
 
     merge_cols = section_keys + ["chunk_count"]
     missing = (
@@ -264,13 +269,12 @@ def validate(cur, df: pd.DataFrame):
 # ─────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────
-def main():
+def main(dbname, apply_idx=True):
+    print(f"\n--- Loading Database: {dbname} (Apply Indexes: {apply_idx}) ---")
     df = load_and_clean(INPUT_CSV)
-
-    # Normalize section to string for consistent key lookups
     df["section"] = df["section"].astype(str)
 
-    conn = get_connection()
+    conn = get_connection(dbname)
     cur = conn.cursor()
 
     try:
@@ -298,20 +302,28 @@ def main():
         insert_syllabus_chunks(cur, df, section_map)
         conn.commit()
 
+        if apply_idx:
+            apply_indexes(cur)
+            conn.commit()
+        else:
+            print("Skipping indexing for this database.")
+
         print("\nValidating...")
         validate(cur, df)
-
-        print("\nAll data inserted successfully!")
+        print(f"\nFinished loading {dbname} successfully!")
 
     except Exception as e:
         conn.rollback()
         print(f"Error: {e}")
         raise
-
     finally:
         cur.close()
         conn.close()
 
 
 if __name__ == "__main__":
-    main()
+    # Load production database with indexes
+    main("course_advisor", apply_idx=True)
+    
+    # Load test database without indexes
+    main("course_advisor_test", apply_idx=False)
