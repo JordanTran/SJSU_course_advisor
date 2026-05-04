@@ -178,7 +178,7 @@ ORDER BY sc.embedding <=> %s
 LIMIT 10;
 
 -- ─────────────────────────────────────────────────────────────────
--- TEST 7: Heavy filter — subject + year + session + instructor ILIKE
+-- TEST 7: Heavy filter — subject + catalog_number + year + session + instructor ILIKE
 -- Targets: idx_course_catalog_number (via unique constraint), idx_section_lookup,
 --          idx_instructor_name_trgm
 -- Fixed: year=2024 → year=2025. This is the most realistic fully-specified
@@ -193,6 +193,7 @@ WITH filtered_ids AS (
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
     WHERE c.subject = 'CMPE'
+      AND c.catalog_number = '180B'
       AND s.year = 2026
       AND s.session = 'Spring'
       AND i.instructor_name ILIKE '%Bond%'

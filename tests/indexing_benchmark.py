@@ -53,7 +53,7 @@ async def run_individual_tests():
             {"label": "Filter: section", "indexes": "idx_section_section"},
             {"label": "Filter: delivery", "indexes": "idx_section_delivery"},
             {"label": "Filter: year + session", "indexes": "idx_section_lookup"},
-            {"label": "Heavy: subject+year+session+instructor", "indexes": "subject, lookup, trgm"},
+            {"label": "Heavy Filter: subject + catalog_number + year + session + instructor", "indexes": "subject, catalog_number, lookup, trgm"},
         ]
 
         with open(INDEX_SQL_PATH, 'r') as f:
