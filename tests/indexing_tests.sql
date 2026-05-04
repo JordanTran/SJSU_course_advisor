@@ -47,7 +47,7 @@ WITH filtered_ids AS (
     JOIN section    s ON s.section_id    = sc.section_id
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
-    WHERE c.catalog_number = '101'
+    WHERE c.catalog_number = '180B'
 )
 SELECT
     sc.chunk_id, sc.chunk_title, sc.chunk_text,
@@ -75,7 +75,7 @@ WITH filtered_ids AS (
     JOIN section    s ON s.section_id    = sc.section_id
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
-    WHERE i.instructor_name ILIKE '%Smith%'
+    WHERE i.instructor_name ILIKE '%Bond%'
 )
 SELECT
     sc.chunk_id, sc.chunk_title, sc.chunk_text,
@@ -102,7 +102,7 @@ WITH filtered_ids AS (
     JOIN section    s ON s.section_id    = sc.section_id
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
-    WHERE s.section = '01'
+    WHERE s.section = '1'
 )
 SELECT
     sc.chunk_id, sc.chunk_title, sc.chunk_text,
@@ -132,7 +132,7 @@ WITH filtered_ids AS (
     JOIN section    s ON s.section_id    = sc.section_id
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
-    WHERE s.delivery = 'Fully Online'
+    WHERE s.delivery = 'In Person'
 )
 SELECT
     sc.chunk_id, sc.chunk_title, sc.chunk_text,
@@ -161,7 +161,7 @@ WITH filtered_ids AS (
     JOIN section    s ON s.section_id    = sc.section_id
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
-    WHERE s.year = 2025 AND s.session = 'Fall'
+    WHERE s.year = 2026 AND s.session = 'Spring'
 )
 SELECT
     sc.chunk_id, sc.chunk_title, sc.chunk_text,
@@ -192,10 +192,10 @@ WITH filtered_ids AS (
     JOIN section    s ON s.section_id    = sc.section_id
     JOIN course     c ON c.course_id     = s.course_id
     JOIN instructor i ON i.instructor_id = s.instructor_id
-    WHERE c.subject = 'CS'
-      AND s.year = 2025
-      AND s.session = 'Fall'
-      AND i.instructor_name ILIKE '%Smith%'
+    WHERE c.subject = 'CMPE'
+      AND s.year = 2026
+      AND s.session = 'Spring'
+      AND i.instructor_name ILIKE '%Bond%'
 )
 SELECT
     sc.chunk_id, sc.chunk_title, sc.chunk_text,
