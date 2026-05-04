@@ -1,7 +1,6 @@
 """
-test_db.py – Course Advisor DB Test Suite
+Comprehensive DB Validation Test Suite for Course Advisor
 Run: pytest tests/course_advisor_test_db_validation.py -v -s
-Requires: pip install psycopg2-binary python-dotenv
 
 Demo order:
   Phase 1 – Connection & Schema
@@ -10,7 +9,7 @@ Demo order:
   Phase 4 – Unique Constraints      (no duplicate rows)
   Phase 5 – Referential Integrity   (no orphaned records)
   Phase 6 – Data Quality            (nulls, ranges, allowed values)
-  Phase 7 – Embedding Quality       (AI-specific checks)
+  Phase 7 – Embedding Quality       (Dimension consistency, no nulls, chunks per section distribution)
   Phase 8 – Grand Finale            (full DB ↔ CSV comparison)
 """
 
