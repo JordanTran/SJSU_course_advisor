@@ -19,6 +19,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 console = Console()
 
 async def get_db_conn(db_name):
+    """Establish connection and register pgvector."""
     conn = await asyncpg.connect(
         host=os.getenv("DB_HOST", "localhost"),
         database=db_name,
@@ -28,11 +29,27 @@ async def get_db_conn(db_name):
     await register_vector(conn)
     return conn
 
+def extract_buffer_stats(plan_json):
+    """
+    Recursively sums 'Shared Hit Blocks' and 'Shared Read Blocks' from the plan.
+    'Hits' represent 8KB data blocks the database had to access.
+    """
+    plan = plan_json['Plan']
+    hits = plan.get('Shared Hit Blocks', 0) + plan.get('Shared Read Blocks', 0)
+    
+    # Also check sub-plans/children for hits
+    if 'Plans' in plan:
+        for subplan in plan['Plans']:
+            hits += subplan.get('Shared Hit Blocks', 0) + subplan.get('Shared Read Blocks', 0)
+            
+    return hits
+
 async def run_individual_tests():
     if not INDEX_SQL_PATH.exists():
         console.print(f"[bold red]Error:[/bold red] Required test file not found at {INDEX_SQL_PATH}")
         return
 
+    # Connect to both indexed and unindexed databases
     idx_conn   = await get_db_conn("course_advisor")
     unidx_conn = await get_db_conn("course_advisor_test")
 
@@ -44,8 +61,6 @@ async def run_individual_tests():
             return
         test_vector = row['embedding']
 
-        # One entry per EXPLAIN block in indexing_tests.sql — order must match.
-        # indexes_targeted lists every index the planner should use for that query.
         tests = [
             {"label": "No filters (vector only)", "indexes": "idx_syllabus_embedding_hnsw"},
             {"label": "Filter: catalog_number", "indexes": "idx_course_catalog_number"},
@@ -53,12 +68,10 @@ async def run_individual_tests():
             {"label": "Filter: section", "indexes": "idx_section_section"},
             {"label": "Filter: delivery", "indexes": "idx_section_delivery"},
             {"label": "Filter: year + session", "indexes": "idx_section_lookup"},
-            {"label": "Heavy Filter: subject + catalog_number + year + session + instructor", "indexes": "subject, catalog_number, lookup, trgm"},
+            {"label": "Heavy Filter: full metadata", "indexes": "catalog, lookup, trgm, hnsw"},
         ]
 
         with open(INDEX_SQL_PATH, 'r') as f:
-            # Each test block is separated by a blank-line comment header.
-            # Split on the EXPLAIN keyword to get one statement per test.
             raw = f.read()
             queries = [
                 "EXPLAIN" + q.strip()
@@ -66,51 +79,58 @@ async def run_individual_tests():
                 if "ANALYZE" in q
             ]
 
-        table = Table(title="\nRAG Retrieval Indexing Benchmark", header_style="bold cyan")
-        table.add_column("Query Shape",         style="dim",  width=38)
-        table.add_column("Indexes Targeted",    style="dim",  width=30)
-        table.add_column("Unindexed (ms)",      justify="right")
-        table.add_column("Indexed (ms)",        justify="right")
-        table.add_column("Speedup",             justify="right", style="bold green")
+        # ── Table Setup ────────────────────────────────────────────────────────
+        table = Table(title="\nHybrid RAG Performance: Speed & I/O Efficiency", header_style="bold cyan")
+        
+        table.add_column("Query Scenario", style="dim", width=30)
+        table.add_column("Base Time",     justify="right")
+        table.add_column("Idx Time",      justify="right", style="green")
+        table.add_column("Base Hits",     justify="right")
+        table.add_column("Idx Hits",      justify="right", style="blue")
+        table.add_column("Speedup",       justify="right", style="bold green")
+        table.add_column("I/O Efficiency", justify="right", style="bold blue")
 
         for i, query in enumerate(queries):
-            if i >= len(tests):
-                break
-
+            if i >= len(tests): break
             test = tests[i]
 
-            # Every query uses %s twice: once in the SELECT similarity expression
-            # and once in ORDER BY.  Replace both with $1 and $2 — asyncpg will
-            # bind the same vector to both, matching what _retrieve() does at runtime.
+            # Bind vector to $1 and $2
             stmt = query.replace("%s", "$1", 1).replace("%s", "$2", 1)
             args = [test_vector, test_vector]
 
+            # Run Unindexed (Baseline)
             res_un   = await unidx_conn.fetchval(stmt, *args)
-            time_un  = json.loads(res_un)[0]['Execution Time']
+            plan_un  = json.loads(res_un)[0]
+            time_un  = plan_un['Execution Time']
+            hits_un  = extract_buffer_stats(plan_un)
 
+            # Run Indexed (Optimized)
             res_idx  = await idx_conn.fetchval(stmt, *args)
-            time_idx = json.loads(res_idx)[0]['Execution Time']
+            plan_idx = json.loads(res_idx)[0]
+            time_idx = plan_idx['Execution Time']
+            hits_idx = extract_buffer_stats(plan_idx)
 
-            speedup = time_un / time_idx if time_idx > 0 else 0
-
-            speedup_str = f"{speedup:.1f}x"
-            if speedup < 1.5:
-                speedup_str = f"[yellow]{speedup_str}[/yellow]"
-            elif speedup > 10:
-                speedup_str = f"[bold green]{speedup_str}[/bold green]"
+            # Performance Metrics
+            speedup    = time_un / time_idx if time_idx > 0 else 0
+            # If hits_idx is 0 (very rare but possible for cache), treat as 1 to avoid div by zero
+            efficiency = hits_un / max(hits_idx, 1)
 
             table.add_row(
                 test["label"],
-                test["indexes"],
-                f"{time_un:.2f}",
-                f"{time_idx:.2f}",
-                speedup_str,
+                f"{time_un:.2f}ms",
+                f"{time_idx:.2f}ms",
+                str(hits_un),
+                str(hits_idx),
+                f"{speedup:.1f}x",
+                f"{efficiency:.1f}x"
             )
 
         console.print(table)
+        console.print("\n[dim]Note: 'Hits' represent the number of 8KB data blocks accessed by the database engine.[/dim]")
+        console.print("[dim]A higher I/O Efficiency means the index successfully bypassed unnecessary data scans.[/dim]\n")
 
     except Exception as e:
-        console.print(f"[bold red]An error occurred:[/bold red] {e}")
+        console.print(f"[bold red]An error occurred during benchmarking:[/bold red] {e}")
     finally:
         await idx_conn.close()
         await unidx_conn.close()
