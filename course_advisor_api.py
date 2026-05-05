@@ -1,5 +1,9 @@
+import asyncio
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,9 +14,18 @@ from pydantic import BaseModel
 from course_advisor import CourseAdvisor
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
+# Session history stores only prior user inputs, never advisor answers.
+SESSION_HISTORY_MAX_QUESTIONS = 5
+SESSION_HISTORY_TTL_SECONDS = 6 * 60 * 60
+
+
+# Lifespan
 
 advisor: CourseAdvisor
+query_history: dict[str, list[str]] = {}
+session_last_seen: dict[str, float] = {}
+history_lock: asyncio.Lock
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,13 +33,14 @@ async def lifespan(app: FastAPI):
     Initialise shared resources on startup; release them on shutdown.
 
     setup() creates the asyncpg connection pool. Because ask() is now a
-    native coroutine, FastAPI runs it directly on the event loop — no worker
+    native coroutine, FastAPI runs it directly on the event loop -- no worker
     threads are involved, so no anyio thread-limiter is needed. The DB pool
     is only held during the short vector search, not across the full LLM call,
     so _POOL_MAX_CONN no longer caps overall concurrency.
     """
-    global advisor
+    global advisor, history_lock
     advisor = CourseAdvisor()
+    history_lock = asyncio.Lock()
     await advisor.setup()
 
     yield
@@ -34,7 +48,7 @@ async def lifespan(app: FastAPI):
     await advisor.close()
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────────────
+# FastAPI app
 
 app = FastAPI(title="Course Advisor API", version="1.0.0", lifespan=lifespan)
 
@@ -46,28 +60,71 @@ app.add_middleware(
 )
 
 
-# ── Request / response schemas ────────────────────────────────────────────────
+# Request / response schemas
 
 class QuestionRequest(BaseModel):
     question: str
+    session_id: Optional[str] = None
 
 
 class AnswerResponse(BaseModel):
     answer: str
+    session_id: str
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# Session helpers
+
+def _new_session_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _clean_session_id(value: Optional[str]) -> str:
+    cleaned = value.strip() if value else ""
+    return cleaned or _new_session_id()
+
+
+def _prune_expired_sessions(now: float) -> None:
+    expired = [
+        session_id
+        for session_id, last_seen in session_last_seen.items()
+        if now - last_seen > SESSION_HISTORY_TTL_SECONDS
+    ]
+    for session_id in expired:
+        query_history.pop(session_id, None)
+        session_last_seen.pop(session_id, None)
+
+
+# Routes
 
 @app.post("/ask", response_model=AnswerResponse)
 async def ask(payload: QuestionRequest) -> AnswerResponse:
-    """Ask the course advisor a question grounded in the syllabi for a given course."""
+    """Ask the course advisor a question grounded in syllabus content."""
+    question = payload.question.strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="Question cannot be empty.")
+
+    session_id = _clean_session_id(payload.session_id)
+
+    async with history_lock:
+        now = time.time()
+        _prune_expired_sessions(now)
+        history = list(query_history.get(session_id, []))
+        session_last_seen[session_id] = now
+
     try:
-        answer = await advisor.ask(payload.question)
+        answer = await advisor.ask(question, history=history)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    return AnswerResponse(answer=answer)
+
+    async with history_lock:
+        session_history = query_history.setdefault(session_id, [])
+        session_history.append(question)
+        del session_history[:-SESSION_HISTORY_MAX_QUESTIONS]
+        session_last_seen[session_id] = time.time()
+
+    return AnswerResponse(answer=answer, session_id=session_id)
 
 
 @app.get("/health")
@@ -75,7 +132,7 @@ def health():
     return {"status": "ok"}
 
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
+# Frontend
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 
