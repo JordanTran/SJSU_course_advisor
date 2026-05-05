@@ -1,5 +1,5 @@
 """
-test_concurrency.py — Concurrency stress-test for the Course Advisor API.
+concurrency_test.py — Concurrency stress-test for the Course Advisor API.
 
 Tests three scenarios:
   1. Burst   — all requests fired simultaneously
@@ -25,9 +25,10 @@ from rich.table import Table
 BASE_URL     = "http://localhost:8000"
 TIMEOUT      = 60.0   # seconds per request; LLM calls can be slow
 
-# Burst: fire all requests at once. 10 == _POOL_MAX_CONN, so this hits the
-# ceiling. Try 15–20 to intentionally trigger 503s and verify pool exhaustion handling.
-BURST_N      = 10
+# Burst: fire all requests at once. Since advisor.ask() is async and the DB
+# pool is only held during short vector-search work, this should surface true
+# request-path bottlenecks rather than anyio thread-pool exhaustion.
+BURST_N      = 15
 
 # Ramp: start at RAMP_STEP concurrent requests, add RAMP_STEP each wave up to
 # RAMP_MAX. Surfaces the exact concurrency level where latency climbs or errors appear.
@@ -41,25 +42,44 @@ SUSTAIN_RPS  = 3
 SUSTAIN_DUR  = 15.0   # seconds
 
 SKIP_BURST   = False
-SKIP_RAMP    = False
+SKIP_RAMP    = True
 SKIP_SUSTAIN = False
 
 console = Console()
 
 # ── Sample payloads ───────────────────────────────────────────────────────────
-# Edit these to match courses that actually exist in your database.
+# The /ask endpoint now accepts QuestionRequest with a single field:
+#     {"question": "..."}
+# Include the course identifier in the natural-language question when needed.
 
 SAMPLE_REQUESTS = [
-    {"question": "What is the grading policy?",          "course_name": "ISE 201"},
-    {"question": "How many units is this course?",       "course_name": "ISE 201"},
-    {"question": "What is the late work policy?",        "course_name": "ISE 201"},
-    {"question": "Who is the instructor?",               "course_name": "ISE 201"},
-    {"question": "What textbook is required?",           "course_name": "ISE 201"},
-    {"question": "When are office hours?",               "course_name": "ISE 201"},
-    {"question": "What is the attendance policy?",       "course_name": "ISE 201"},
-    {"question": "Is there a final exam?",               "course_name": "ISE 201"},
-    {"question": "What topics are covered week 1?",      "course_name": "ISE 201"},
-    {"question": "What is the course description?",      "course_name": "ISE 201"},
+    # No filters (global search)
+    {"question": "What class should i take for database systems?"},
+    {"question": "What class should i take for artificial intelligence?"},
+    {"question": "What class should i take for algorithms?"},
+
+    # Subject + catalog_number only
+    {"question": "For ISE 201, what is the grading policy?"},
+    {"question": "For ISE 201, how are you assessed?"},
+    {"question": "In subject ISE, catalog number 201, how many units is the course?"},
+
+
+    # Subject + catalog_number + year/session
+    {"question": "For ISE 201 in Spring 2026, what is the late work policy?"},
+    {"question": "For the 2026 Spring session of ISE 201, is there a final exam?"},
+    {"question": "For ISE 201 in Spring 2025, what topics are covered in week 1?"},
+
+    # Subject + catalog_number + section
+    {"question": "For ISE 201 section 1, who is the instructor?"},
+    {"question": "For ISE 201 section 1, when are office hours?"},
+
+    # Instructor filter
+    {"question": "For classes taught by Professor Gupta, what is the grading policy?"},
+    {"question": "For instructor Gupta, what are the office hours?"},
+
+    # Combined filters to exercise narrower retrieval paths
+    {"question": "For Spring 2026 ISE 201 section 1, what is the late work policy?"},
+    {"question": "For Spring 2026 ISE 201 section 1, is there a final exam?"}
 ]
 
 
@@ -154,7 +174,18 @@ async def send_request(
             timeout=timeout,
         )
         latency = time.perf_counter() - start
-        return RequestResult(index=index, status=response.status_code, latency_s=latency)
+        error = None
+        if response.status_code != 200:
+            try:
+                error = str(response.json())
+            except ValueError:
+                error = response.text
+        return RequestResult(
+            index=index,
+            status=response.status_code,
+            latency_s=latency,
+            error=error,
+        )
     except Exception as exc:
         latency = time.perf_counter() - start
         return RequestResult(index=index, status=-1, latency_s=latency, error=str(exc))
@@ -342,21 +373,21 @@ async def main() -> None:
     summaries: list[ScenarioSummary] = []
 
     if not SKIP_BURST:
-        console.print(f"[bold]1/3 Burst[/bold] — {BURST_N} simultaneous requests")
+        console.print(f"[bold]Burst[/bold] — {BURST_N} simultaneous requests")
         summary = await run_burst(BASE_URL, BURST_N, TIMEOUT)
         summaries.append(summary)
         console.print(f"  Done in {summary.wall_time_s:.2f}s  "
                       f"({summary.successes}/{summary.total} ok)\n")
 
     if not SKIP_RAMP:
-        console.print(f"[bold]2/3 Ramp[/bold] — 1 → {RAMP_MAX} concurrent, step {RAMP_STEP}")
+        console.print(f"[bold]Ramp[/bold] — 1 → {RAMP_MAX} concurrent, step {RAMP_STEP}")
         summary = await run_ramp(BASE_URL, RAMP_MAX, RAMP_STEP, TIMEOUT)
         summaries.append(summary)
         console.print(f"  Done in {summary.wall_time_s:.2f}s  "
                       f"({summary.successes}/{summary.total} ok)\n")
 
     if not SKIP_SUSTAIN:
-        console.print(f"[bold]3/3 Sustain[/bold] — {SUSTAIN_RPS} req/s for {SUSTAIN_DUR:.0f}s")
+        console.print(f"[bold]Sustain[/bold] — {SUSTAIN_RPS} req/s for {SUSTAIN_DUR:.0f}s")
         summary = await run_sustain(BASE_URL, SUSTAIN_RPS, SUSTAIN_DUR, TIMEOUT)
         summaries.append(summary)
         console.print(f"  Done in {summary.wall_time_s:.2f}s  "
