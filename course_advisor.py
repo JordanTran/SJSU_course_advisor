@@ -23,6 +23,7 @@ from typing_extensions import TypedDict
 class ReWOOState(TypedDict):
     """State threaded through the three ReWOO nodes."""
     question: str
+    question_history: list[str] # recent prior user inputs for follow-up context
     plan:     list[dict]        # [{id, tool, args}, …]  populated by planner
     evidence: dict[str, Any]    # {step_id: tool_result} populated by worker
     answer:   str               # final student-facing answer from solver
@@ -63,6 +64,8 @@ Rules:
   question, say so clearly and do not guess.
 - If information varies across sections (e.g. different instructors or semesters),
   acknowledge the differences rather than generalizing.
+- If the prompt includes recent user questions, use them only to resolve references
+  in the current question. Answer only the current question.
 - Every claim you make must be traceable to a specific excerpt. At the end of your
   answer, list all syllabus URLs that contributed to your response as plain text
   on separate lines — do not hyperlink them, do not embed them in anchor text,
@@ -74,7 +77,9 @@ Rules:
 You are a planning agent for an academic course advisor system at San José State University.
 
 Given a student question, produce a step-by-step retrieval plan using the
-retrieve_syllabus_chunks tool.  Output ONLY a valid JSON object — no markdown
+retrieve_syllabus_chunks tool. The user message may include recent prior user
+questions; use those only to resolve follow-up references such as "that course",
+"the professor", "its exams", or "what about grading". Output ONLY a valid JSON object — no markdown
 fences, no explanation, no preamble — with exactly this structure:
 
 {
@@ -98,7 +103,9 @@ fences, no explanation, no preamble — with exactly this structure:
 
 Rules:
 - Include only optional filter keys whose values you are confident about from
-  the question.  Omit keys you do not know — do not include them with null values.
+  the current question or recent prior user questions.  Omit keys you do not know
+  — do not include them with null values.
+- Use recent prior user questions only for context, not as extra questions to answer.
 - A later step's "query" value may contain a prior step id as a placeholder
   (e.g. "#E1") if that step's retrieved content should inform the follow-up query.
   The worker will substitute the placeholder before executing the step.
@@ -122,6 +129,9 @@ Rules:
     _RETRY_MAX_ATTEMPTS = 4
     _RETRY_BASE_DELAY   = 1.0    # seconds
     _RETRY_MAX_DELAY    = 30.0   # seconds
+
+    _HISTORY_MAX_QUESTIONS = 5
+    _HISTORY_MAX_CHARS     = 1200
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -230,9 +240,13 @@ Rules:
             Single LLM call.  Receives the student question; emits a full
             retrieval plan as a list of {id, tool, args} dicts.
             """
+            planner_question = self._format_question_with_history(
+                state["question"],
+                state.get("question_history", []),
+            )
             messages = [
                 SystemMessage(content=self.PLANNER_SYSTEM_PROMPT),
-                HumanMessage(content=state["question"]),
+                HumanMessage(content=planner_question),
             ]
             response = await planner_llm.ainvoke(messages)
             raw = _extract_text(response.content).strip()
@@ -340,12 +354,26 @@ Rules:
                     )
                 }
 
-            context     = self._format_context(unique_chunks)
-            user_prompt = (
-                f"The following are relevant syllabus excerpts retrieved for your question.\n\n"
-                f"{context}\n\n"
-                f"Student question: {state['question']}"
-            )
+            context = self._format_context(unique_chunks)
+            history = state.get("question_history", [])
+            if history:
+                history_text = "\n".join(
+                    f"{i}. {item}" for i, item in enumerate(history, start=1)
+                )
+                user_prompt = (
+                    f"The following are relevant syllabus excerpts retrieved for your question.\n\n"
+                    f"{context}\n\n"
+                    f"Recent user questions, oldest to newest. Use only to resolve "
+                    f"references in the current question; do not answer these prior "
+                    f"questions again.\n{history_text}\n\n"
+                    f"Current student question: {state['question']}"
+                )
+            else:
+                user_prompt = (
+                    f"The following are relevant syllabus excerpts retrieved for your question.\n\n"
+                    f"{context}\n\n"
+                    f"Student question: {state['question']}"
+                )
             messages = [
                 SystemMessage(content=self.SYSTEM_PROMPT),
                 HumanMessage(content=user_prompt),
@@ -371,20 +399,35 @@ Rules:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    async def ask(self, question: str, verbose: bool = False) -> str:
+    async def ask(
+        self,
+        question: str,
+        history: Optional[list[str]] = None,
+        verbose: bool = False,
+    ) -> str:
         """
         Run the full ReWOO pipeline for a student question.
 
         Course identification (subject, catalog number, etc.) is now entirely
         the agent's responsibility — the caller passes only the raw question.
 
+        history contains recent prior user questions from the same session. It is
+        used only to resolve follow-up references; assistant answers are not
+        stored or passed back into the advisor.
+
         Set verbose=True to print each node's output as it completes:
           • Planner  — the full retrieval plan (steps + args)
           • Worker   — every retrieved chunk per evidence key
           • Solver   — the final answer
         """
+        # Backward compatibility for callers that used ask(question, verbose).
+        if isinstance(history, bool) and verbose is False:
+            verbose = history
+            history = None
+
         initial_state = {
             "question": question,
+            "question_history": self._recent_history(history),
             "plan":     [],
             "evidence": {},
             "answer":   "",
@@ -731,6 +774,50 @@ Rules:
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _recent_history(self, history: Optional[list[str]]) -> list[str]:
+        """Return a bounded, cleaned list of recent prior user inputs."""
+        if not history:
+            return []
+
+        cleaned = [
+            item.strip()
+            for item in history
+            if isinstance(item, str) and item.strip()
+        ]
+        recent = cleaned[-self._HISTORY_MAX_QUESTIONS:]
+
+        kept_reversed: list[str] = []
+        total_chars = 0
+        for item in reversed(recent):
+            next_total = total_chars + len(item)
+            if kept_reversed and next_total > self._HISTORY_MAX_CHARS:
+                break
+            kept_reversed.append(item)
+            total_chars = next_total
+
+        return list(reversed(kept_reversed))
+
+    def _format_question_with_history(
+        self,
+        question: str,
+        history: Optional[list[str]],
+    ) -> str:
+        """Format the current question with prior user inputs for planning."""
+        recent = self._recent_history(history)
+        if not recent:
+            return question
+
+        history_text = "\n".join(
+            f"{i}. {item}" for i, item in enumerate(recent, start=1)
+        )
+        return (
+            "Recent user questions, oldest to newest. Use them only to resolve "
+            "course, instructor, section, term, or delivery references in the "
+            "current question. Do not answer the prior questions again.\n"
+            f"{history_text}\n\n"
+            f"Current student question:\n{question}"
+        )
 
     @staticmethod
     def _resolve_api_key() -> str:

@@ -1,6 +1,6 @@
 """
 Comprehensive DB Validation Test Suite for Course Advisor
-Run: pytest tests/course_advisor_test_db_validation.py -v -s
+Run: pytest course_advisor_test_db_validation.py -v -s
 
 Demo order:
   Phase 1 – Connection & Schema
