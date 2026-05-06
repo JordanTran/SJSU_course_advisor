@@ -838,12 +838,13 @@ Rules:
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-        stats_sql = """
+        stats_sql = f"""
             SELECT
                 COUNT(*)                               AS total,
                 COUNT(*) FILTER (WHERE is_positive)    AS positive,
                 COUNT(*) FILTER (WHERE NOT is_positive) AS negative
             FROM feedback
+            {where}
         """
 
         count_sql  = f"SELECT COUNT(*) FROM feedback {where}"
@@ -859,7 +860,7 @@ Rules:
 
         async with self._pool.acquire() as conn:
             async with conn.transaction(isolation="repeatable_read"):
-                stats_row      = await conn.fetchrow(stats_sql)
+                stats_row      = await conn.fetchrow(stats_sql, *filter_params)
                 filtered_total = await conn.fetchval(count_sql, *filter_params)
                 rows           = await conn.fetch(items_sql, *items_params)
 
