@@ -809,8 +809,8 @@ Rules:
             p += 1
 
         if session_id and session_id.strip():
-            conditions.append(f"session_id ILIKE ${p}")
-            filter_params.append(f"%{session_id.strip()}%")
+            conditions.append(f"session_id = ${p}")
+            filter_params.append(session_id.strip())
             p += 1
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""

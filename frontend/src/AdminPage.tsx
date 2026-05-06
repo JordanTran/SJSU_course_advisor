@@ -8,6 +8,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   Search,
+  X,
   ChevronDown,
   ChevronUp,
   ChevronLeft,
@@ -276,8 +277,18 @@ export default function AdminPage() {
                   value={searchDraft}
                   onChange={(e) => setSearchDraft(e.target.value)}
                   placeholder="Search questions and answers…"
-                  className="h-9 rounded-xl pl-9"
+                  className="h-9 rounded-xl pl-9 pr-8"
                 />
+                {searchDraft && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchDraft("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
               <div className="relative sm:w-64">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -285,8 +296,18 @@ export default function AdminPage() {
                   value={sessionDraft}
                   onChange={(e) => setSessionDraft(e.target.value)}
                   placeholder="Filter by session ID…"
-                  className="h-9 rounded-xl pl-9 font-mono text-xs"
+                  className="h-9 rounded-xl pl-9 pr-8 font-mono text-xs"
                 />
+                {sessionDraft && (
+                  <button
+                    type="button"
+                    onClick={() => setSessionDraft("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label="Clear session filter"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
