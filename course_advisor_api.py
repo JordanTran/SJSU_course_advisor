@@ -5,7 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -150,6 +150,24 @@ async def submit_feedback(payload: FeedbackRequest) -> None:
             payload.question,
             payload.answer,
             payload.is_positive,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/feedback")
+async def list_feedback(
+    vote:   Optional[str] = Query(default=None, description="Filter by vote: 'up' or 'down'"),
+    search: Optional[str] = Query(default=None, description="Full-text search on question and answer"),
+    limit:  int           = Query(default=50, ge=1, le=200),
+    offset: int           = Query(default=0,  ge=0),
+):
+    """Return feedback rows and aggregate stats for the admin dashboard."""
+    if vote is not None and vote not in ("up", "down"):
+        raise HTTPException(status_code=422, detail="vote must be 'up' or 'down'.")
+    try:
+        return await advisor.get_feedback(
+            vote=vote, search=search, limit=limit, offset=offset
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))

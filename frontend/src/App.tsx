@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { GraduationCap, RefreshCcw, Send, ThumbsUp, ThumbsDown } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import AdminPage from "./AdminPage";
 
 const API_URL = "/ask";
 const FEEDBACK_URL = "/feedback";
@@ -36,7 +37,7 @@ interface AnswerResponse {
 
 const initialAssistantMessage: Message = {
   role: "assistant",
-  content: "Hi! I'm the SJSU Curriculum Advisor. What would you like to know?",
+  content: "Hi! I'm the SJSU Course Advisor. What would you like to know?",
 };
 
 function createSessionId() {
@@ -133,6 +134,8 @@ function Bubble({ role, content, feedbackKey, feedback, onFeedback }: BubbleProp
 }
 
 export default function SJSUAdvisorChat() {
+  if (window.location.pathname === "/admin") return <AdminPage />;
+
   const [messages, setMessages] = useState<Message[]>([initialAssistantMessage]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
@@ -233,7 +236,7 @@ export default function SJSUAdvisorChat() {
                   <GraduationCap className="h-5 w-5" />
                 </div>
                 <div>
-                  <CardTitle className="text-lg font-semibold">SJSU Advisor</CardTitle>
+                  <CardTitle className="text-lg font-semibold">SJSU Course Advisor</CardTitle>
                   <CardDescription>Ask anything about your courses</CardDescription>
                 </div>
               </div>

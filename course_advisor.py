@@ -775,6 +775,82 @@ Rules:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    async def get_feedback(
+        self,
+        vote: Optional[str] = None,   # "up" | "down" | None (all)
+        search: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """
+        Return feedback rows with overall stats.
+
+        Stats (total/positive/negative) always reflect the *entire* table so
+        the summary cards stay stable while the user filters.  filtered_total
+        is the row count that matches the current filters, used for pagination.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool is not initialised.")
+
+        # Build WHERE clause for the filtered query only.
+        conditions: list[str] = []
+        filter_params: list[Any] = []
+        p = 1
+
+        if vote == "up":
+            conditions.append("is_positive = TRUE")
+        elif vote == "down":
+            conditions.append("is_positive = FALSE")
+
+        if search and search.strip():
+            conditions.append(f"(question ILIKE ${p} OR answer ILIKE ${p})")
+            filter_params.append(f"%{search.strip()}%")
+            p += 1
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        stats_sql = """
+            SELECT
+                COUNT(*)                               AS total,
+                COUNT(*) FILTER (WHERE is_positive)    AS positive,
+                COUNT(*) FILTER (WHERE NOT is_positive) AS negative
+            FROM feedback
+        """
+
+        count_sql  = f"SELECT COUNT(*) FROM feedback {where}"
+
+        items_sql  = f"""
+            SELECT feedback_id, question, answer, is_positive, created_at
+            FROM   feedback
+            {where}
+            ORDER  BY created_at DESC
+            LIMIT  ${p} OFFSET ${p + 1}
+        """
+        items_params = filter_params + [limit, offset]
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction(isolation="repeatable_read"):
+                stats_row      = await conn.fetchrow(stats_sql)
+                filtered_total = await conn.fetchval(count_sql, *filter_params)
+                rows           = await conn.fetch(items_sql, *items_params)
+
+        return {
+            "total":          int(stats_row["total"]),
+            "positive":       int(stats_row["positive"]),
+            "negative":       int(stats_row["negative"]),
+            "filtered_total": int(filtered_total),
+            "items": [
+                {
+                    "feedback_id": row["feedback_id"],
+                    "question":    row["question"],
+                    "answer":      row["answer"],
+                    "is_positive": row["is_positive"],
+                    "created_at":  row["created_at"].isoformat(),
+                }
+                for row in rows
+            ],
+        }
+
     async def log_feedback(
         self,
         session_id: str,

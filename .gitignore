@@ -39,3 +39,6 @@ backups/
 
 #CSVs
 *.csv
+
+#jsons
+*.json
