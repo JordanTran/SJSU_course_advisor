@@ -19,6 +19,7 @@ import ReactMarkdown from "react-markdown";
 
 interface FeedbackItem {
   feedback_id: number;
+  session_id: string;
   question: string;
   answer: string;
   is_positive: boolean;
@@ -155,10 +156,12 @@ export default function AdminPage() {
   const [voteFilter, setVoteFilter] = useState<VoteFilter>("all");
   const [searchDraft, setSearchDraft] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
+  const [sessionDraft, setSessionDraft] = useState("");
+  const [activeSession, setActiveSession] = useState("");
   const [page, setPage]           = useState(0);
   const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounce search input: fire query 400 ms after the user stops typing.
+  // Debounce text search
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
@@ -169,6 +172,19 @@ export default function AdminPage() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [searchDraft]);
+
+  // Debounce session id search
+  const sessionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (sessionDebounceRef.current) clearTimeout(sessionDebounceRef.current);
+    sessionDebounceRef.current = setTimeout(() => {
+      setPage(0);
+      setActiveSession(sessionDraft);
+    }, 400);
+    return () => {
+      if (sessionDebounceRef.current) clearTimeout(sessionDebounceRef.current);
+    };
+  }, [sessionDraft]);
 
   // Reset page when filters change.
   useEffect(() => {
@@ -187,6 +203,7 @@ export default function AdminPage() {
     });
     if (voteFilter !== "all") params.set("vote", voteFilter);
     if (activeSearch.trim())  params.set("search", activeSearch.trim());
+    if (activeSession.trim()) params.set("session_id", activeSession.trim());
 
     fetch(`/feedback?${params.toString()}`)
       .then((res) => {
@@ -198,7 +215,7 @@ export default function AdminPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [voteFilter, activeSearch, page]);
+  }, [voteFilter, activeSearch, activeSession, page]);
 
   const totalPages = data ? Math.ceil(data.filtered_total / PAGE_SIZE) : 0;
 
@@ -251,15 +268,26 @@ export default function AdminPage() {
 
         {/* ── Filters ── */}
         <Card className="rounded-2xl">
-          <CardContent className="flex flex-col gap-3 pt-5 pb-5 sm:flex-row sm:items-center">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={searchDraft}
-                onChange={(e) => setSearchDraft(e.target.value)}
-                placeholder="Search questions and answers…"
-                className="h-9 rounded-xl pl-9"
-              />
+          <CardContent className="flex flex-col gap-3 pt-5 pb-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  placeholder="Search questions and answers…"
+                  className="h-9 rounded-xl pl-9"
+                />
+              </div>
+              <div className="relative sm:w-64">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={sessionDraft}
+                  onChange={(e) => setSessionDraft(e.target.value)}
+                  placeholder="Filter by session ID…"
+                  className="h-9 rounded-xl pl-9 font-mono text-xs"
+                />
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -305,18 +333,26 @@ export default function AdminPage() {
             {!error && data && data.items.length > 0 && (
               <>
                 {/* Column headers */}
-                <div className="grid grid-cols-[1fr_1fr_80px_140px] gap-4 border-b px-6 py-2 text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-[1fr_1fr_160px_80px_140px] gap-4 border-b px-6 py-2 text-xs font-medium text-muted-foreground">
                   <span>Question</span>
                   <span>Answer</span>
+                  <span>Session ID</span>
                   <span>Vote</span>
                   <span>Date</span>
                 </div>
 
                 {data.items.map((item, idx) => (
                   <div key={item.feedback_id}>
-                    <div className="grid grid-cols-[1fr_1fr_80px_140px] gap-4 px-6 py-4 hover:bg-muted/30 transition-colors">
+                    <div className="grid grid-cols-[1fr_1fr_160px_80px_140px] gap-4 px-6 py-4 hover:bg-muted/30 transition-colors">
                       <ExpandableText text={item.question} maxChars={120} />
                       <ExpandableText text={item.answer} maxChars={160} markdown />
+                      <span
+                        className="pt-0.5 font-mono text-xs text-muted-foreground truncate cursor-pointer hover:text-foreground transition-colors"
+                        title={item.session_id}
+                        onClick={() => setSessionDraft(item.session_id)}
+                      >
+                        {item.session_id.slice(0, 8)}…
+                      </span>
                       <div className="pt-0.5">
                         <VoteChip isPositive={item.is_positive} />
                       </div>

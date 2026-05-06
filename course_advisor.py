@@ -777,8 +777,9 @@ Rules:
 
     async def get_feedback(
         self,
-        vote: Optional[str] = None,   # "up" | "down" | None (all)
+        vote: Optional[str] = None,
         search: Optional[str] = None,
+        session_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -807,6 +808,11 @@ Rules:
             filter_params.append(f"%{search.strip()}%")
             p += 1
 
+        if session_id and session_id.strip():
+            conditions.append(f"session_id ILIKE ${p}")
+            filter_params.append(f"%{session_id.strip()}%")
+            p += 1
+
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         stats_sql = """
@@ -820,7 +826,7 @@ Rules:
         count_sql  = f"SELECT COUNT(*) FROM feedback {where}"
 
         items_sql  = f"""
-            SELECT feedback_id, question, answer, is_positive, created_at
+            SELECT feedback_id, session_id, question, answer, is_positive, created_at
             FROM   feedback
             {where}
             ORDER  BY created_at DESC
@@ -842,6 +848,7 @@ Rules:
             "items": [
                 {
                     "feedback_id": row["feedback_id"],
+                    "session_id":  row["session_id"],
                     "question":    row["question"],
                     "answer":      row["answer"],
                     "is_positive": row["is_positive"],
