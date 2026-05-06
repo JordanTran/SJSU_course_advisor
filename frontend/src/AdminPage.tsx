@@ -229,8 +229,8 @@ export default function AdminPage() {
             <GraduationCap className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold">Feedback Dashboard</h1>
-            <p className="text-sm text-muted-foreground">Review ratings to improve your prompt</p>
+            <h1 className="text-lg font-semibold">Admin Dashboard</h1>
+            <p className="text-sm text-muted-foreground">Review user feedback</p>
           </div>
           <a
             href="/"

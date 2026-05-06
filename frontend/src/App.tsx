@@ -48,15 +48,6 @@ function createSessionId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function getOrCreateSessionId() {
-  const existing = window.sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
-  if (existing) return existing;
-
-  const next = createSessionId();
-  window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, next);
-  return next;
-}
-
 function saveSessionId(sessionId: string) {
   window.sessionStorage.setItem(SESSION_ID_STORAGE_KEY, sessionId);
 }
@@ -139,7 +130,11 @@ export default function SJSUAdvisorChat() {
   const [messages, setMessages] = useState<Message[]>([initialAssistantMessage]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
-  const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
+  const [sessionId, setSessionId] = useState(() => {
+    const id = createSessionId();
+    saveSessionId(id);
+    return id;
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
