@@ -775,6 +775,34 @@ Rules:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    async def log_feedback(
+        self,
+        session_id: str,
+        question: str,
+        answer: str,
+        is_positive: bool,
+    ) -> None:
+        """
+        Persist a thumbs-up / thumbs-down rating to the feedback table.
+
+        Called from the API layer; runs a single INSERT and releases the
+        connection immediately so the pool is not held during any LLM work.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool is not initialised.")
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO feedback (session_id, question, answer, is_positive)
+                VALUES ($1, $2, $3, $4)
+                """,
+                session_id,
+                question,
+                answer,
+                is_positive,
+            )
+
     def _recent_history(self, history: Optional[list[str]]) -> list[str]:
         """Return a bounded, cleaned list of recent prior user inputs."""
         if not history:

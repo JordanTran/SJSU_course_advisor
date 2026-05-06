@@ -72,6 +72,13 @@ class AnswerResponse(BaseModel):
     session_id: str
 
 
+class FeedbackRequest(BaseModel):
+    session_id: str
+    question: str
+    answer: str
+    is_positive: bool
+
+
 # Session helpers
 
 def _new_session_id() -> str:
@@ -125,6 +132,27 @@ async def ask(payload: QuestionRequest) -> AnswerResponse:
         session_last_seen[session_id] = time.time()
 
     return AnswerResponse(answer=answer, session_id=session_id)
+
+
+@app.post("/feedback", status_code=204)
+async def submit_feedback(payload: FeedbackRequest) -> None:
+    """Record a thumbs-up or thumbs-down rating for an advisor answer."""
+    if not payload.session_id.strip():
+        raise HTTPException(status_code=422, detail="session_id cannot be empty.")
+    if not payload.question.strip():
+        raise HTTPException(status_code=422, detail="question cannot be empty.")
+    if not payload.answer.strip():
+        raise HTTPException(status_code=422, detail="answer cannot be empty.")
+
+    try:
+        await advisor.log_feedback(
+            payload.session_id,
+            payload.question,
+            payload.answer,
+            payload.is_positive,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/health")
