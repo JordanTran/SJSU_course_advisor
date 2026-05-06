@@ -16,6 +16,15 @@ import {
   Calendar,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +43,12 @@ interface FeedbackResponse {
   negative: number;
   filtered_total: number;
   items: FeedbackItem[];
+}
+
+interface ChartDataPoint {
+  day: string;
+  total: number;
+  ratio: number;
 }
 
 type VoteFilter = "all" | "up" | "down";
@@ -156,6 +171,7 @@ export default function AdminPage() {
   const [data, setData]           = useState<FeedbackResponse | null>(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [voteFilter, setVoteFilter] = useState<VoteFilter>("all");
   const [searchDraft, setSearchDraft] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
@@ -166,6 +182,14 @@ export default function AdminPage() {
   const [dateMode, setDateMode]       = useState<DateMode>("exact");
   const [page, setPage]           = useState(0);
   const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fetch global chart data once on mount.
+  useEffect(() => {
+    fetch("/feedback/chart")
+      .then((res) => res.json())
+      .then((json: ChartDataPoint[]) => setChartData(json))
+      .catch(() => {/* non-critical — chart stays hidden */});
+  }, []);
 
   // Debounce text search
   useEffect(() => {
@@ -265,30 +289,68 @@ export default function AdminPage() {
           </a>
         </div>
 
-        {/* ── Stat cards ── */}
-        {data && (
-          <div className="grid grid-cols-3 gap-4">
-            <StatCard
-              label="Total responses rated"
-              value={data.total}
-              icon={<span className="text-sm font-bold">#</span>}
-              accent="bg-primary/10"
-            />
-            <StatCard
-              label="Thumbs up"
-              value={data.positive}
-              sub={pct(data.positive, data.total)}
-              icon={<ThumbsUp className="h-4 w-4 text-green-600" />}
-              accent="bg-green-100"
-            />
-            <StatCard
-              label="Thumbs down"
-              value={data.negative}
-              sub={pct(data.negative, data.total)}
-              icon={<ThumbsDown className="h-4 w-4 text-red-600" />}
-              accent="bg-red-100"
-            />
-          </div>
+        {/* ── Trend chart ── */}
+        {chartData.length > 0 && (
+          <Card className="rounded-2xl">
+            <CardHeader className="pb-0">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Daily Positive Feedback Ratio
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4 pb-2">
+              <ResponsiveContainer width="100%" height={180}>
+                <AreaChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="ratioGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="hsl(221 83% 53%)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="hsl(221 83% 53%)" stopOpacity={0}   />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fontSize: 11 }}
+                    ticks={[chartData[0].day, chartData[chartData.length - 1].day]}
+                    tickFormatter={(v: string) => {
+                      const [y, m, d] = v.split("-").map(Number);
+                      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+                    }}
+                    stroke="hsl(var(--muted-foreground))"
+                  />
+                  <YAxis
+                    tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+                    domain={[0, 1]}
+                    tick={{ fontSize: 11 }}
+                    width={40}
+                    stroke="hsl(var(--muted-foreground))"
+                  />
+                  <Tooltip
+                    formatter={(value: number) => [`${Math.round(value * 100)}%`, "Positive ratio"]}
+                    labelFormatter={(label: string) => {
+                      const [y, m, d] = label.split("-").map(Number);
+                      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+                    }}
+                    contentStyle={{
+                      fontSize: 12,
+                      borderRadius: "0.75rem",
+                      border: "1px solid hsl(var(--border))",
+                      background: "hsl(var(--card))",
+                      color: "hsl(var(--foreground))",
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="ratio"
+                    stroke="hsl(221 83% 53%)"
+                    strokeWidth={2}
+                    fill="url(#ratioGradient)"
+                    dot={false}
+                    activeDot={{ r: 4, fill: "hsl(221 83% 53%)" }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
         )}
 
         {/* ── Filters ── */}
@@ -397,6 +459,32 @@ export default function AdminPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ── Stat cards ── */}
+        {data && (
+          <div className="grid grid-cols-3 gap-4">
+            <StatCard
+              label="Total responses rated"
+              value={data.total}
+              icon={<span className="text-sm font-bold">#</span>}
+              accent="bg-primary/10"
+            />
+            <StatCard
+              label="Thumbs up"
+              value={data.positive}
+              sub={pct(data.positive, data.total)}
+              icon={<ThumbsUp className="h-4 w-4 text-green-600" />}
+              accent="bg-green-100"
+            />
+            <StatCard
+              label="Thumbs down"
+              value={data.negative}
+              sub={pct(data.negative, data.total)}
+              icon={<ThumbsDown className="h-4 w-4 text-red-600" />}
+              accent="bg-red-100"
+            />
+          </div>
+        )}
 
         {/* ── Table ── */}
         <Card className="rounded-2xl">

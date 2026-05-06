@@ -155,6 +155,15 @@ async def submit_feedback(payload: FeedbackRequest) -> None:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/feedback/chart")
+async def feedback_chart():
+    """Return daily positive-rating ratios for the global trend chart."""
+    try:
+        return await advisor.get_feedback_chart_data()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/feedback")
 async def list_feedback(
     vote:        Optional[str] = Query(default=None, description="Filter by vote: 'up' or 'down'"),

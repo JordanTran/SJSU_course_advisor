@@ -910,6 +910,40 @@ Rules:
                 is_positive,
             )
 
+
+    async def get_feedback_chart_data(self) -> list[dict]:
+        """
+        Return daily positive-rating ratios for the global trend chart.
+
+        Queries the entire feedback table (no filters) and returns one row per
+        day that has at least one rating, ordered oldest-to-newest so the chart
+        reads left-to-right chronologically.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool is not initialised.")
+
+        sql = """
+            SELECT
+                created_at::date                             AS day,
+                COUNT(*)                                     AS total,
+                COUNT(*) FILTER (WHERE is_positive)          AS positive
+            FROM   feedback
+            GROUP  BY day
+            ORDER  BY day ASC
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+
+        return [
+            {
+                "day":   row["day"].isoformat(),
+                "total": int(row["total"]),
+                "ratio": round(int(row["positive"]) / int(row["total"]), 4),
+            }
+            for row in rows
+        ]
+
     def _recent_history(self, history: Optional[list[str]]) -> list[str]:
         """Return a bounded, cleaned list of recent prior user inputs."""
         if not history:
