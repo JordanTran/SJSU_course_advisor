@@ -32,3 +32,34 @@ CREATE INDEX IF NOT EXISTS idx_section_delivery ON section(delivery);
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_instructor_name_trgm
 ON instructor USING gin (instructor_name gin_trgm_ops);
+
+-- ─────────────────────────────────────────────
+--  FEEDBACK INDEXES
+-- ─────────────────────────────────────────────
+ 
+-- 7. created_at DESC — every items query sorts by this. Lets Postgres serve
+--    an unfiltered ORDER BY … LIMIT via index scan without a separate sort.
+CREATE INDEX IF NOT EXISTS idx_feedback_created_at
+ON feedback (created_at DESC);
+ 
+-- 8. is_positive + created_at — when the vote filter is active, the index
+--    above can't be used (no is_positive condition). This composite lets
+--    Postgres scan only the true/false partition already in created_at DESC
+--    order, avoiding a sort before the LIMIT.
+CREATE INDEX IF NOT EXISTS idx_feedback_vote_created
+ON feedback (is_positive, created_at DESC);
+ 
+-- 9. session_id — high-cardinality exact equality match (session_id = $p).
+--    A plain btree is the right choice here.
+CREATE INDEX IF NOT EXISTS idx_feedback_session_id
+ON feedback (session_id);
+ 
+-- 10. Trigram indexes for ILIKE '%…%' search on question and answer.
+--     A btree index cannot handle leading wildcards; trigram GIN can.
+--     The feedback table grows with every user interaction across all sessions,
+--     so seq scans on these text columns will degrade as the table scales.
+CREATE INDEX IF NOT EXISTS idx_feedback_question_trgm
+ON feedback USING gin (question gin_trgm_ops);
+ 
+CREATE INDEX IF NOT EXISTS idx_feedback_answer_trgm
+ON feedback USING gin (answer gin_trgm_ops);

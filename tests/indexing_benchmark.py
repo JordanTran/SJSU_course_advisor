@@ -36,13 +36,33 @@ def extract_buffer_stats(plan_json):
     """
     plan = plan_json['Plan']
     hits = plan.get('Shared Hit Blocks', 0) + plan.get('Shared Read Blocks', 0)
-    
+
     # Also check sub-plans/children for hits
     if 'Plans' in plan:
         for subplan in plan['Plans']:
             hits += subplan.get('Shared Hit Blocks', 0) + subplan.get('Shared Read Blocks', 0)
-            
+
     return hits
+
+def make_table(title: str) -> Table:
+    """Create a consistently styled Rich table."""
+    table = Table(title=f"\n{title}", header_style="bold cyan")
+    table.add_column("Query Scenario",  style="dim", width=32)
+    table.add_column("Base Time",       justify="right")
+    table.add_column("Idx Time",        justify="right", style="green")
+    table.add_column("Base Hits",       justify="right")
+    table.add_column("Idx Hits",        justify="right", style="blue")
+    table.add_column("Speedup",         justify="right", style="bold green")
+    table.add_column("I/O Efficiency",  justify="right", style="bold blue")
+    return table
+
+async def run_query(conn, stmt: str, args: list):
+    """Run an EXPLAIN query and return the parsed plan."""
+    if args:
+        raw = await conn.fetchval(stmt, *args)
+    else:
+        raw = await conn.fetchval(stmt)
+    return json.loads(raw)[0]
 
 async def run_individual_tests():
     if not INDEX_SQL_PATH.exists():
@@ -57,21 +77,34 @@ async def run_individual_tests():
         # Get a real embedding so the vector query is realistic
         row = await idx_conn.fetchrow("SELECT embedding FROM syllabus_chunk LIMIT 1")
         if not row:
-            console.print("[bold yellow]Warning:[/bold yellow] No data found to run benchmarks.")
+            console.print("[bold yellow]Warning:[/bold yellow] No syllabus data found to run RAG benchmarks.")
             return
         test_vector = row['embedding']
 
-        tests = [
-            {"label": "No filters (vector only)", "indexes": "idx_syllabus_embedding_hnsw"},
-            {"label": "Filter: catalog_number", "indexes": "idx_course_catalog_number"},
-            {"label": "Filter: instructor ILIKE", "indexes": "idx_instructor_name_trgm"},
-            {"label": "Filter: section", "indexes": "idx_section_section"},
-            {"label": "Filter: delivery", "indexes": "idx_section_delivery"},
-            {"label": "Filter: year + session", "indexes": "idx_section_lookup"},
-            {"label": "Heavy Filter: full metadata", "indexes": "catalog, lookup, trgm, hnsw"},
+        # ── Test metadata ─────────────────────────────────────────────────────
+        # is_vector=True  → replace %s with $1/$2 and bind test_vector twice
+        # is_vector=False → no placeholders; query runs as-is with no args
+        rag_tests = [
+            {"label": "No filters (vector only)",    "is_vector": True},
+            {"label": "Filter: catalog_number",      "is_vector": True},
+            {"label": "Filter: instructor ILIKE",    "is_vector": True},
+            {"label": "Filter: section",             "is_vector": True},
+            {"label": "Filter: delivery",            "is_vector": True},
+            {"label": "Filter: year + session",      "is_vector": True},
+            {"label": "Heavy filter: full metadata", "is_vector": True},
         ]
 
-        with open(INDEX_SQL_PATH, 'r') as f:
+        feedback_tests = [
+            {"label": "No filters (ORDER BY date)",  "is_vector": False},
+            {"label": "Filter: vote (is_positive)",  "is_vector": False},
+            {"label": "Filter: session_id (exact)",  "is_vector": False},
+            {"label": "Text search (ILIKE on both)", "is_vector": False},
+        ]
+
+        all_tests = rag_tests + feedback_tests
+
+        # ── Parse SQL file ────────────────────────────────────────────────────
+        with open(INDEX_SQL_PATH, encoding='utf-8') as f:
             raw = f.read()
             queries = [
                 "EXPLAIN" + q.strip()
@@ -79,53 +112,67 @@ async def run_individual_tests():
                 if "ANALYZE" in q
             ]
 
-        # ── Table Setup ────────────────────────────────────────────────────────
-        table = Table(title="\nHybrid RAG Performance: Speed & I/O Efficiency", header_style="bold cyan")
-        
-        table.add_column("Query Scenario", style="dim", width=30)
-        table.add_column("Base Time",     justify="right")
-        table.add_column("Idx Time",      justify="right", style="green")
-        table.add_column("Base Hits",     justify="right")
-        table.add_column("Idx Hits",      justify="right", style="blue")
-        table.add_column("Speedup",       justify="right", style="bold green")
-        table.add_column("I/O Efficiency", justify="right", style="bold blue")
+        if len(queries) < len(all_tests):
+            console.print(
+                f"[bold yellow]Warning:[/bold yellow] Found {len(queries)} queries "
+                f"but expected {len(all_tests)}. Some tests will be skipped."
+            )
+
+        # ── Run tests and collect rows ────────────────────────────────────────
+        rag_rows      = []
+        feedback_rows = []
 
         for i, query in enumerate(queries):
-            if i >= len(tests): break
-            test = tests[i]
+            if i >= len(all_tests):
+                break
 
-            # Bind vector to $1 and $2
-            stmt = query.replace("%s", "$1", 1).replace("%s", "$2", 1)
-            args = [test_vector, test_vector]
+            test = all_tests[i]
 
-            # Run Unindexed (Baseline)
-            res_un   = await unidx_conn.fetchval(stmt, *args)
-            plan_un  = json.loads(res_un)[0]
+            if test["is_vector"]:
+                stmt = query.replace("%s", "$1", 1).replace("%s", "$2", 1)
+                args = [test_vector, test_vector]
+            else:
+                stmt = query
+                args = []
+
+            plan_un  = await run_query(unidx_conn, stmt, args)
+            plan_idx = await run_query(idx_conn,   stmt, args)
+
             time_un  = plan_un['Execution Time']
             hits_un  = extract_buffer_stats(plan_un)
-
-            # Run Indexed (Optimized)
-            res_idx  = await idx_conn.fetchval(stmt, *args)
-            plan_idx = json.loads(res_idx)[0]
             time_idx = plan_idx['Execution Time']
             hits_idx = extract_buffer_stats(plan_idx)
 
-            # Performance Metrics
             speedup    = time_un / time_idx if time_idx > 0 else 0
-            # If hits_idx is 0 (very rare but possible for cache), treat as 1 to avoid div by zero
             efficiency = hits_un / max(hits_idx, 1)
 
-            table.add_row(
+            row = (
                 test["label"],
                 f"{time_un:.2f}ms",
                 f"{time_idx:.2f}ms",
                 str(hits_un),
                 str(hits_idx),
                 f"{speedup:.1f}x",
-                f"{efficiency:.1f}x"
+                f"{efficiency:.1f}x",
             )
 
-        console.print(table)
+            if i < len(rag_tests):
+                rag_rows.append(row)
+            else:
+                feedback_rows.append(row)
+
+        # ── Print RAG table ───────────────────────────────────────────────────
+        rag_table = make_table("Hybrid RAG Performance: Speed & I/O Efficiency")
+        for r in rag_rows:
+            rag_table.add_row(*r)
+        console.print(rag_table)
+
+        # ── Print feedback table ──────────────────────────────────────────────
+        fb_table = make_table("Feedback Table Performance: Speed & I/O Efficiency")
+        for r in feedback_rows:
+            fb_table.add_row(*r)
+        console.print(fb_table)
+
         console.print("\n[dim]Note: 'Hits' represent the number of 8KB data blocks accessed by the database engine.[/dim]")
         console.print("[dim]A higher I/O Efficiency means the index successfully bypassed unnecessary data scans.[/dim]\n")
 

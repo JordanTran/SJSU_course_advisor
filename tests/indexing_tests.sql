@@ -211,3 +211,63 @@ JOIN course       c  ON c.course_id    = s.course_id
 JOIN instructor   i  ON i.instructor_id = s.instructor_id
 ORDER BY sc.embedding <=> %s
 LIMIT 10;
+
+-- ═════════════════════════════════════════════════════════════════
+-- FEEDBACK TABLE TESTS
+-- All queries mirror get_feedback() in course_advisor.py exactly.
+-- No vector parameters — literal values are embedded directly.
+-- ═════════════════════════════════════════════════════════════════
+
+-- ─────────────────────────────────────────────────────────────────
+-- TEST 8: No filters — ORDER BY created_at DESC
+-- Targets: idx_feedback_created_at
+-- Baseline: full seq scan + sort. Index allows a direct index scan
+-- so Postgres can return the first 20 rows without sorting the table.
+-- ─────────────────────────────────────────────────────────────────
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT feedback_id, session_id, question, answer, is_positive, created_at
+FROM   feedback
+ORDER  BY created_at DESC
+LIMIT  20 OFFSET 0;
+
+-- ─────────────────────────────────────────────────────────────────
+-- TEST 9: Vote filter — is_positive = TRUE
+-- Targets: idx_feedback_vote_created (is_positive, created_at DESC)
+-- The unfiltered created_at index can't be used here (no is_positive
+-- condition). The composite index covers the filter + sort together.
+-- ─────────────────────────────────────────────────────────────────
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT feedback_id, session_id, question, answer, is_positive, created_at
+FROM   feedback
+WHERE  is_positive = TRUE
+ORDER  BY created_at DESC
+LIMIT  20 OFFSET 0;
+
+-- ─────────────────────────────────────────────────────────────────
+-- TEST 10: Session ID filter — exact equality
+-- Targets: idx_feedback_session_id
+-- Each session_id in the test data is unique (UUID-shaped), so this
+-- is maximally selective. Replace the literal with any session_id
+-- from your feedback table if needed:
+--   SELECT session_id FROM feedback LIMIT 1;
+-- ─────────────────────────────────────────────────────────────────
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT feedback_id, session_id, question, answer, is_positive, created_at
+FROM   feedback
+WHERE  session_id = 'e5f6a7b8-0001-4001-0001-000000000001'
+ORDER  BY created_at DESC
+LIMIT  20 OFFSET 0;
+
+-- ─────────────────────────────────────────────────────────────────
+-- TEST 11: Text search — ILIKE '%…%' on question OR answer
+-- Targets: idx_feedback_question_trgm, idx_feedback_answer_trgm
+-- Leading wildcard means btree is useless; trigram GIN is the only
+-- index type that can satisfy this pattern.
+-- ─────────────────────────────────────────────────────────────────
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT feedback_id, session_id, question, answer, is_positive, created_at
+FROM   feedback
+WHERE  question ILIKE '%grading%'
+    OR answer   ILIKE '%grading%'
+ORDER  BY created_at DESC
+LIMIT  20 OFFSET 0;
