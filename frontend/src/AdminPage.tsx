@@ -24,6 +24,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceArea,
 } from "recharts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -176,12 +177,51 @@ export default function AdminPage() {
   const [activeSearch, setActiveSearch] = useState("");
   const [sessionDraft, setSessionDraft] = useState("");
   const [activeSession, setActiveSession] = useState("");
-  const [dateStartDraft, setDateStartDraft] = useState("");   // as typed MM-DD-YYYY HH:MM:SS
-  const [activeDateStart, setActiveDateStart] = useState(""); // validated, sent to API
+  const [dateStartDraft, setDateStartDraft] = useState("");
+  const [activeDateStart, setActiveDateStart] = useState("");
   const [dateEndDraft, setDateEndDraft] = useState("");
   const [activeDateEnd, setActiveDateEnd] = useState("");
   const [page, setPage]           = useState(0);
   const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ─── Chart zoom state ───────────────────────────────────────────────────────
+  const [refAreaLeft,  setRefAreaLeft]  = useState<string>("");
+  const [refAreaRight, setRefAreaRight] = useState<string>("");
+  const [isSelecting,  setIsSelecting]  = useState(false);
+  const [zoomedData,   setZoomedData]   = useState<ChartDataPoint[]>([]);
+
+  const displayData = zoomedData.length ? zoomedData : chartData;
+
+  function handleChartMouseDown(e: any) {
+    if (!e?.activeLabel) return;
+    setRefAreaLeft(e.activeLabel);
+    setRefAreaRight(e.activeLabel);
+    setIsSelecting(true);
+  }
+
+  function handleChartMouseMove(e: any) {
+    if (!isSelecting || !e?.activeLabel) return;
+    setRefAreaRight(e.activeLabel);
+  }
+
+  function handleChartMouseUp() {
+    if (!isSelecting) return;
+    setIsSelecting(false);
+    if (!refAreaLeft || !refAreaRight || refAreaLeft === refAreaRight) {
+      setRefAreaLeft(""); setRefAreaRight("");
+      return;
+    }
+    const [l, r] = [refAreaLeft, refAreaRight].sort();
+    const slice = chartData.filter((d) => d.day >= l && d.day <= r);
+    if (slice.length > 1) setZoomedData(slice);
+    setRefAreaLeft(""); setRefAreaRight("");
+  }
+
+  function resetZoom() {
+    setZoomedData([]);
+    setRefAreaLeft("");
+    setRefAreaRight("");
+  }
 
   // Fetch global chart data once on mount.
   useEffect(() => {
@@ -299,14 +339,31 @@ export default function AdminPage() {
         {/* ── Trend chart ── */}
         {chartData.length > 0 && (
           <Card className="rounded-2xl">
-            <CardHeader className="pb-0">
+            <CardHeader className="pb-0 flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Daily Positive Feedback Ratio
               </CardTitle>
+              {zoomedData.length > 0 && (
+                <button
+                  type="button"
+                  onClick={resetZoom}
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                >
+                  <X className="h-3 w-3" /> Reset zoom
+                </button>
+              )}
             </CardHeader>
             <CardContent className="pt-4 pb-2">
-              <ResponsiveContainer width="100%" height={180}>
-                <AreaChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart
+                  data={displayData}
+                  margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+                  onMouseDown={handleChartMouseDown}
+                  onMouseMove={handleChartMouseMove}
+                  onMouseUp={handleChartMouseUp}
+                  onMouseLeave={() => { if (isSelecting) handleChartMouseUp(); }}
+                  style={{ cursor: "crosshair", userSelect: "none" }}
+                >
                   <defs>
                     <linearGradient id="ratioGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%"  stopColor="hsl(221 83% 53%)" stopOpacity={0.3} />
@@ -317,7 +374,7 @@ export default function AdminPage() {
                   <XAxis
                     dataKey="day"
                     tick={{ fontSize: 11 }}
-                    ticks={[chartData[0].day, chartData[chartData.length - 1].day]}
+                    ticks={[displayData[0].day, displayData[displayData.length - 1].day]}
                     tickFormatter={(v: string) => {
                       const [y, m, d] = v.split("-").map(Number);
                       return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -353,7 +410,17 @@ export default function AdminPage() {
                     fill="url(#ratioGradient)"
                     dot={false}
                     activeDot={{ r: 4, fill: "hsl(221 83% 53%)" }}
+                    isAnimationActive={false}
                   />
+                  {refAreaLeft && refAreaRight && (
+                    <ReferenceArea
+                      x1={refAreaLeft}
+                      x2={refAreaRight}
+                      strokeOpacity={0.3}
+                      fill="hsl(221 83% 53%)"
+                      fillOpacity={0.15}
+                    />
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             </CardContent>
