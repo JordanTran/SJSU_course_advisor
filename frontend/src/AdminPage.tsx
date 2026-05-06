@@ -52,7 +52,6 @@ interface ChartDataPoint {
 }
 
 type VoteFilter = "all" | "up" | "down";
-type DateMode   = "exact" | "before" | "after";
 
 const PAGE_SIZE = 20;
 
@@ -177,9 +176,10 @@ export default function AdminPage() {
   const [activeSearch, setActiveSearch] = useState("");
   const [sessionDraft, setSessionDraft] = useState("");
   const [activeSession, setActiveSession] = useState("");
-  const [dateDraft, setDateDraft]     = useState("");          // MM-DD-YYYY as typed
-  const [activeDate, setActiveDate]   = useState("");          // YYYY-MM-DD sent to API
-  const [dateMode, setDateMode]       = useState<DateMode>("exact");
+  const [dateStartDraft, setDateStartDraft] = useState("");   // as typed MM-DD-YYYY HH:MM:SS
+  const [activeDateStart, setActiveDateStart] = useState(""); // validated, sent to API
+  const [dateEndDraft, setDateEndDraft] = useState("");
+  const [activeDateEnd, setActiveDateEnd] = useState("");
   const [page, setPage]           = useState(0);
   const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -216,25 +216,34 @@ export default function AdminPage() {
     };
   }, [sessionDraft]);
 
-  // Debounce date filter
-  const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Debounce date start filter
+  const dateStartDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
-    dateDebounceRef.current = setTimeout(() => {
+    if (dateStartDebounceRef.current) clearTimeout(dateStartDebounceRef.current);
+    dateStartDebounceRef.current = setTimeout(() => {
       setPage(0);
-      // Convert MM-DD-YYYY → YYYY-MM-DD for the API, or clear if invalid/empty.
-      const match = dateDraft.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-      setActiveDate(match ? `${match[3]}-${match[1]}-${match[2]}` : "");
+      const match = dateStartDraft.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
+      setActiveDateStart(match ? dateStartDraft : "");
     }, 400);
-    return () => {
-      if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
-    };
-  }, [dateDraft]);
+    return () => { if (dateStartDebounceRef.current) clearTimeout(dateStartDebounceRef.current); };
+  }, [dateStartDraft]);
 
-  // Reset page when filters change.
+  // Debounce date end filter
+  const dateEndDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (dateEndDebounceRef.current) clearTimeout(dateEndDebounceRef.current);
+    dateEndDebounceRef.current = setTimeout(() => {
+      setPage(0);
+      const match = dateEndDraft.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
+      setActiveDateEnd(match ? dateEndDraft : "");
+    }, 400);
+    return () => { if (dateEndDebounceRef.current) clearTimeout(dateEndDebounceRef.current); };
+  }, [dateEndDraft]);
+
+  // Reset page when vote filter changes.
   useEffect(() => {
     setPage(0);
-  }, [voteFilter, dateMode]);
+  }, [voteFilter]);
 
   // Fetch whenever filters or page changes.
   useEffect(() => {
@@ -246,13 +255,11 @@ export default function AdminPage() {
       limit:  String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
     });
-    if (voteFilter !== "all")  params.set("vote", voteFilter);
-    if (activeSearch.trim())   params.set("search", activeSearch.trim());
-    if (activeSession.trim())  params.set("session_id", activeSession.trim());
-    if (activeDate.trim()) {
-      params.set("date_filter", activeDate.trim());
-      params.set("date_mode", dateMode);
-    }
+    if (voteFilter !== "all")       params.set("vote", voteFilter);
+    if (activeSearch.trim())        params.set("search", activeSearch.trim());
+    if (activeSession.trim())       params.set("session_id", activeSession.trim());
+    if (activeDateStart.trim())     params.set("date_start", activeDateStart.trim());
+    if (activeDateEnd.trim())       params.set("date_end", activeDateEnd.trim());
 
     fetch(`/feedback?${params.toString()}`)
       .then((res) => {
@@ -264,7 +271,7 @@ export default function AdminPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [voteFilter, activeSearch, activeSession, activeDate, dateMode, page]);
+  }, [voteFilter, activeSearch, activeSession, activeDateStart, activeDateEnd, page]);
 
   const totalPages = data ? Math.ceil(data.filtered_total / PAGE_SIZE) : 0;
 
@@ -414,48 +421,67 @@ export default function AdminPage() {
               ))}
             </div>
 
-            {/* Date filter row */}
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <div className="relative sm:w-48">
-                <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={dateDraft}
-                  onChange={(e) => setDateDraft(e.target.value)}
-                  placeholder="MM-DD-YYYY"
-                  maxLength={10}
-                  className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
-                    dateDraft && !activeDate ? "border-destructive ring-1 ring-destructive/40" : ""
-                  }`}
-                />
-                {dateDraft && (
-                  <button
-                    type="button"
-                    onClick={() => { setDateDraft(""); setActiveDate(""); }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label="Clear date filter"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+            {/* Date range filter row */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              {/* Start datetime */}
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground pl-1">From</span>
+                <div className="relative sm:w-56">
+                  <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={dateStartDraft}
+                    onChange={(e) => setDateStartDraft(e.target.value)}
+                    placeholder="MM-DD-YYYY HH:MM:SS"
+                    maxLength={19}
+                    className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
+                      dateStartDraft && !activeDateStart ? "border-destructive ring-1 ring-destructive/40" : ""
+                    }`}
+                  />
+                  {dateStartDraft && (
+                    <button
+                      type="button"
+                      onClick={() => { setDateStartDraft(""); setActiveDateStart(""); }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="Clear start date"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {dateStartDraft && !activeDateStart && (
+                  <span className="text-xs text-destructive pl-1">Use MM-DD-YYYY HH:MM:SS</span>
                 )}
               </div>
-              <div className="flex gap-1.5">
-                {(["before", "exact", "after"] as DateMode[]).map((m) => (
-                  <Button
-                    key={m}
-                    type="button"
-                    variant={dateMode === m ? "default" : "outline"}
-                    size="sm"
-                    disabled={!activeDate}
-                    className="rounded-xl text-xs px-3"
-                    onClick={() => setDateMode(m)}
-                  >
-                    {m === "exact" ? "On date" : m === "before" ? "Before" : "After"}
-                  </Button>
-                ))}
+
+              {/* End datetime */}
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground pl-1">To</span>
+                <div className="relative sm:w-56">
+                  <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={dateEndDraft}
+                    onChange={(e) => setDateEndDraft(e.target.value)}
+                    placeholder="MM-DD-YYYY HH:MM:SS"
+                    maxLength={19}
+                    className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
+                      dateEndDraft && !activeDateEnd ? "border-destructive ring-1 ring-destructive/40" : ""
+                    }`}
+                  />
+                  {dateEndDraft && (
+                    <button
+                      type="button"
+                      onClick={() => { setDateEndDraft(""); setActiveDateEnd(""); }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="Clear end date"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {dateEndDraft && !activeDateEnd && (
+                  <span className="text-xs text-destructive pl-1">Use MM-DD-YYYY HH:MM:SS</span>
+                )}
               </div>
-              {dateDraft && !activeDate && (
-                <span className="text-xs text-destructive">Enter a valid date as MM-DD-YYYY</span>
-              )}
             </div>
           </CardContent>
         </Card>

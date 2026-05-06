@@ -780,8 +780,8 @@ Rules:
         vote: Optional[str] = None,
         search: Optional[str] = None,
         session_id: Optional[str] = None,
-        date_filter: Optional[str] = None,
-        date_mode: str = "exact",
+        date_start: Optional[str] = None,
+        date_end: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -815,26 +815,29 @@ Rules:
             filter_params.append(session_id.strip())
             p += 1
 
-        if date_filter and date_filter.strip():
-            import datetime
+        import datetime as _dt
+
+        def _parse_datetime(value: str, field_name: str) -> _dt.datetime:
+            """Parse DD-MM-YYYY HH:MM:SS into a datetime object."""
             try:
-                parsed_date = datetime.date.fromisoformat(date_filter.strip())
+                return _dt.datetime.strptime(value.strip(), "%m-%d-%Y %H:%M:%S")
             except ValueError:
                 raise ValueError(
-                    f"Invalid date_filter value: {date_filter!r}. Expected ISO format YYYY-MM-DD."
+                    f"Invalid {field_name} value: {value!r}. "
+                    "Expected format MM-DD-YYYY HH:MM:SS (e.g. 05-06-2026 13:00:00)."
                 )
-            if date_mode == "exact":
-                conditions.append(f"created_at::date = ${p}")
-                filter_params.append(parsed_date)
-                p += 1
-            elif date_mode == "before":
-                conditions.append(f"created_at < ${p}")
-                filter_params.append(parsed_date)
-                p += 1
-            elif date_mode == "after":
-                conditions.append(f"created_at >= ${p}")
-                filter_params.append(parsed_date)
-                p += 1
+
+        if date_start and date_start.strip():
+            parsed_start = _parse_datetime(date_start, "date_start")
+            conditions.append(f"created_at >= ${p}")
+            filter_params.append(parsed_start)
+            p += 1
+
+        if date_end and date_end.strip():
+            parsed_end = _parse_datetime(date_end, "date_end")
+            conditions.append(f"created_at <= ${p}")
+            filter_params.append(parsed_end)
+            p += 1
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
