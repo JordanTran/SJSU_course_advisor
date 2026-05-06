@@ -780,6 +780,8 @@ Rules:
         vote: Optional[str] = None,
         search: Optional[str] = None,
         session_id: Optional[str] = None,
+        date_filter: Optional[str] = None,
+        date_mode: str = "exact",
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -813,14 +815,36 @@ Rules:
             filter_params.append(session_id.strip())
             p += 1
 
+        if date_filter and date_filter.strip():
+            import datetime
+            try:
+                parsed_date = datetime.date.fromisoformat(date_filter.strip())
+            except ValueError:
+                raise ValueError(
+                    f"Invalid date_filter value: {date_filter!r}. Expected ISO format YYYY-MM-DD."
+                )
+            if date_mode == "exact":
+                conditions.append(f"created_at::date = ${p}")
+                filter_params.append(parsed_date)
+                p += 1
+            elif date_mode == "before":
+                conditions.append(f"created_at < ${p}")
+                filter_params.append(parsed_date)
+                p += 1
+            elif date_mode == "after":
+                conditions.append(f"created_at >= ${p}")
+                filter_params.append(parsed_date)
+                p += 1
+
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-        stats_sql = """
+        stats_sql = f"""
             SELECT
                 COUNT(*)                               AS total,
                 COUNT(*) FILTER (WHERE is_positive)    AS positive,
                 COUNT(*) FILTER (WHERE NOT is_positive) AS negative
             FROM feedback
+            {where}
         """
 
         count_sql  = f"SELECT COUNT(*) FROM feedback {where}"
@@ -836,7 +860,7 @@ Rules:
 
         async with self._pool.acquire() as conn:
             async with conn.transaction(isolation="repeatable_read"):
-                stats_row      = await conn.fetchrow(stats_sql)
+                stats_row      = await conn.fetchrow(stats_sql, *filter_params)
                 filtered_total = await conn.fetchval(count_sql, *filter_params)
                 rows           = await conn.fetch(items_sql, *items_params)
 
@@ -885,6 +909,40 @@ Rules:
                 answer,
                 is_positive,
             )
+
+
+    async def get_feedback_chart_data(self) -> list[dict]:
+        """
+        Return daily positive-rating ratios for the global trend chart.
+
+        Queries the entire feedback table (no filters) and returns one row per
+        day that has at least one rating, ordered oldest-to-newest so the chart
+        reads left-to-right chronologically.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool is not initialised.")
+
+        sql = """
+            SELECT
+                created_at::date                             AS day,
+                COUNT(*)                                     AS total,
+                COUNT(*) FILTER (WHERE is_positive)          AS positive
+            FROM   feedback
+            GROUP  BY day
+            ORDER  BY day ASC
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+
+        return [
+            {
+                "day":   row["day"].isoformat(),
+                "total": int(row["total"]),
+                "ratio": round(int(row["positive"]) / int(row["total"]), 4),
+            }
+            for row in rows
+        ]
 
     def _recent_history(self, history: Optional[list[str]]) -> list[str]:
         """Return a bounded, cleaned list of recent prior user inputs."""

@@ -155,21 +155,38 @@ async def submit_feedback(payload: FeedbackRequest) -> None:
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/feedback/chart")
+async def feedback_chart():
+    """Return daily positive-rating ratios for the global trend chart."""
+    try:
+        return await advisor.get_feedback_chart_data()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/feedback")
 async def list_feedback(
-    vote:       Optional[str] = Query(default=None, description="Filter by vote: 'up' or 'down'"),
-    search:     Optional[str] = Query(default=None, description="Full-text search on question and answer"),
-    session_id: Optional[str] = Query(default=None, description="Filter by session ID (partial match)"),
+    vote:        Optional[str] = Query(default=None, description="Filter by vote: 'up' or 'down'"),
+    search:      Optional[str] = Query(default=None, description="Full-text search on question and answer"),
+    session_id:  Optional[str] = Query(default=None, description="Filter by session ID (partial match)"),
+    date_filter: Optional[str] = Query(default=None, description="Filter by date in ISO format YYYY-MM-DD (e.g. 2026-05-06)"),
+    date_mode:   str           = Query(default="exact", description="How to apply date_filter: 'exact', 'before', or 'after'"),
     limit:  int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0,  ge=0),
 ):
     """Return feedback rows and aggregate stats for the admin dashboard."""
     if vote is not None and vote not in ("up", "down"):
         raise HTTPException(status_code=422, detail="vote must be 'up' or 'down'.")
+    if date_mode not in ("exact", "before", "after"):
+        raise HTTPException(status_code=422, detail="date_mode must be 'exact', 'before', or 'after'.")
     try:
         return await advisor.get_feedback(
-            vote=vote, search=search, session_id=session_id, limit=limit, offset=offset
+            vote=vote, search=search, session_id=session_id,
+            date_filter=date_filter, date_mode=date_mode,
+            limit=limit, offset=offset,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

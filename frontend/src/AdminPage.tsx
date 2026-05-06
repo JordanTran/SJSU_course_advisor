@@ -13,8 +13,18 @@ import {
   ChevronUp,
   ChevronLeft,
   ChevronRight,
+  Calendar,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,7 +45,14 @@ interface FeedbackResponse {
   items: FeedbackItem[];
 }
 
+interface ChartDataPoint {
+  day: string;
+  total: number;
+  ratio: number;
+}
+
 type VoteFilter = "all" | "up" | "down";
+type DateMode   = "exact" | "before" | "after";
 
 const PAGE_SIZE = 20;
 
@@ -154,13 +171,25 @@ export default function AdminPage() {
   const [data, setData]           = useState<FeedbackResponse | null>(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [voteFilter, setVoteFilter] = useState<VoteFilter>("all");
   const [searchDraft, setSearchDraft] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
   const [sessionDraft, setSessionDraft] = useState("");
   const [activeSession, setActiveSession] = useState("");
+  const [dateDraft, setDateDraft]     = useState("");          // MM-DD-YYYY as typed
+  const [activeDate, setActiveDate]   = useState("");          // YYYY-MM-DD sent to API
+  const [dateMode, setDateMode]       = useState<DateMode>("exact");
   const [page, setPage]           = useState(0);
   const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fetch global chart data once on mount.
+  useEffect(() => {
+    fetch("/feedback/chart")
+      .then((res) => res.json())
+      .then((json: ChartDataPoint[]) => setChartData(json))
+      .catch(() => {/* non-critical — chart stays hidden */});
+  }, []);
 
   // Debounce text search
   useEffect(() => {
@@ -187,10 +216,25 @@ export default function AdminPage() {
     };
   }, [sessionDraft]);
 
+  // Debounce date filter
+  const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
+    dateDebounceRef.current = setTimeout(() => {
+      setPage(0);
+      // Convert MM-DD-YYYY → YYYY-MM-DD for the API, or clear if invalid/empty.
+      const match = dateDraft.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      setActiveDate(match ? `${match[3]}-${match[1]}-${match[2]}` : "");
+    }, 400);
+    return () => {
+      if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
+    };
+  }, [dateDraft]);
+
   // Reset page when filters change.
   useEffect(() => {
     setPage(0);
-  }, [voteFilter]);
+  }, [voteFilter, dateMode]);
 
   // Fetch whenever filters or page changes.
   useEffect(() => {
@@ -202,9 +246,13 @@ export default function AdminPage() {
       limit:  String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
     });
-    if (voteFilter !== "all") params.set("vote", voteFilter);
-    if (activeSearch.trim())  params.set("search", activeSearch.trim());
-    if (activeSession.trim()) params.set("session_id", activeSession.trim());
+    if (voteFilter !== "all")  params.set("vote", voteFilter);
+    if (activeSearch.trim())   params.set("search", activeSearch.trim());
+    if (activeSession.trim())  params.set("session_id", activeSession.trim());
+    if (activeDate.trim()) {
+      params.set("date_filter", activeDate.trim());
+      params.set("date_mode", dateMode);
+    }
 
     fetch(`/feedback?${params.toString()}`)
       .then((res) => {
@@ -216,7 +264,7 @@ export default function AdminPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [voteFilter, activeSearch, activeSession, page]);
+  }, [voteFilter, activeSearch, activeSession, activeDate, dateMode, page]);
 
   const totalPages = data ? Math.ceil(data.filtered_total / PAGE_SIZE) : 0;
 
@@ -241,30 +289,68 @@ export default function AdminPage() {
           </a>
         </div>
 
-        {/* ── Stat cards ── */}
-        {data && (
-          <div className="grid grid-cols-3 gap-4">
-            <StatCard
-              label="Total responses rated"
-              value={data.total}
-              icon={<span className="text-sm font-bold">#</span>}
-              accent="bg-primary/10"
-            />
-            <StatCard
-              label="Thumbs up"
-              value={data.positive}
-              sub={pct(data.positive, data.total)}
-              icon={<ThumbsUp className="h-4 w-4 text-green-600" />}
-              accent="bg-green-100"
-            />
-            <StatCard
-              label="Thumbs down"
-              value={data.negative}
-              sub={pct(data.negative, data.total)}
-              icon={<ThumbsDown className="h-4 w-4 text-red-600" />}
-              accent="bg-red-100"
-            />
-          </div>
+        {/* ── Trend chart ── */}
+        {chartData.length > 0 && (
+          <Card className="rounded-2xl">
+            <CardHeader className="pb-0">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Daily Positive Feedback Ratio
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4 pb-2">
+              <ResponsiveContainer width="100%" height={180}>
+                <AreaChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="ratioGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="hsl(221 83% 53%)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="hsl(221 83% 53%)" stopOpacity={0}   />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fontSize: 11 }}
+                    ticks={[chartData[0].day, chartData[chartData.length - 1].day]}
+                    tickFormatter={(v: string) => {
+                      const [y, m, d] = v.split("-").map(Number);
+                      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+                    }}
+                    stroke="hsl(var(--muted-foreground))"
+                  />
+                  <YAxis
+                    tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+                    domain={[0, 1]}
+                    tick={{ fontSize: 11 }}
+                    width={40}
+                    stroke="hsl(var(--muted-foreground))"
+                  />
+                  <Tooltip
+                    formatter={(value: number) => [`${Math.round(value * 100)}%`, "Positive ratio"]}
+                    labelFormatter={(label: string) => {
+                      const [y, m, d] = label.split("-").map(Number);
+                      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+                    }}
+                    contentStyle={{
+                      fontSize: 12,
+                      borderRadius: "0.75rem",
+                      border: "1px solid hsl(var(--border))",
+                      background: "hsl(var(--card))",
+                      color: "hsl(var(--foreground))",
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="ratio"
+                    stroke="hsl(221 83% 53%)"
+                    strokeWidth={2}
+                    fill="url(#ratioGradient)"
+                    dot={false}
+                    activeDot={{ r: 4, fill: "hsl(221 83% 53%)" }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
         )}
 
         {/* ── Filters ── */}
@@ -327,21 +413,81 @@ export default function AdminPage() {
                 </Button>
               ))}
             </div>
+
+            {/* Date filter row */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="relative sm:w-48">
+                <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={dateDraft}
+                  onChange={(e) => setDateDraft(e.target.value)}
+                  placeholder="MM-DD-YYYY"
+                  maxLength={10}
+                  className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
+                    dateDraft && !activeDate ? "border-destructive ring-1 ring-destructive/40" : ""
+                  }`}
+                />
+                {dateDraft && (
+                  <button
+                    type="button"
+                    onClick={() => { setDateDraft(""); setActiveDate(""); }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label="Clear date filter"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-1.5">
+                {(["before", "exact", "after"] as DateMode[]).map((m) => (
+                  <Button
+                    key={m}
+                    type="button"
+                    variant={dateMode === m ? "default" : "outline"}
+                    size="sm"
+                    disabled={!activeDate}
+                    className="rounded-xl text-xs px-3"
+                    onClick={() => setDateMode(m)}
+                  >
+                    {m === "exact" ? "On date" : m === "before" ? "Before" : "After"}
+                  </Button>
+                ))}
+              </div>
+              {dateDraft && !activeDate && (
+                <span className="text-xs text-destructive">Enter a valid date as MM-DD-YYYY</span>
+              )}
+            </div>
           </CardContent>
         </Card>
 
+        {/* ── Stat cards ── */}
+        {data && (
+          <div className="grid grid-cols-3 gap-4">
+            <StatCard
+              label="Total responses rated"
+              value={data.total}
+              icon={<span className="text-sm font-bold">#</span>}
+              accent="bg-primary/10"
+            />
+            <StatCard
+              label="Thumbs up"
+              value={data.positive}
+              sub={pct(data.positive, data.total)}
+              icon={<ThumbsUp className="h-4 w-4 text-green-600" />}
+              accent="bg-green-100"
+            />
+            <StatCard
+              label="Thumbs down"
+              value={data.negative}
+              sub={pct(data.negative, data.total)}
+              icon={<ThumbsDown className="h-4 w-4 text-red-600" />}
+              accent="bg-red-100"
+            />
+          </div>
+        )}
+
         {/* ── Table ── */}
         <Card className="rounded-2xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {loading
-                ? "Loading…"
-                : data
-                ? `${data.filtered_total} result${data.filtered_total !== 1 ? "s" : ""}`
-                : ""}
-            </CardTitle>
-          </CardHeader>
-
           <CardContent className="p-0">
             {error && (
               <p className="px-6 py-8 text-sm text-red-600">Error: {error}</p>
