@@ -828,11 +828,11 @@ Rules:
                 filter_params.append(parsed_date)
                 p += 1
             elif date_mode == "before":
-                conditions.append(f"created_at::date < ${p}")
+                conditions.append(f"created_at < ${p}")
                 filter_params.append(parsed_date)
                 p += 1
             elif date_mode == "after":
-                conditions.append(f"created_at::date > ${p}")
+                conditions.append(f"created_at >= ${p}")
                 filter_params.append(parsed_date)
                 p += 1
 
