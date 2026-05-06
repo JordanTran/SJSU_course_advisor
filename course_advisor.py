@@ -775,6 +775,117 @@ Rules:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    async def get_feedback(
+        self,
+        vote: Optional[str] = None,
+        search: Optional[str] = None,
+        session_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """
+        Return feedback rows with overall stats.
+
+        Stats (total/positive/negative) always reflect the *entire* table so
+        the summary cards stay stable while the user filters.  filtered_total
+        is the row count that matches the current filters, used for pagination.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool is not initialised.")
+
+        # Build WHERE clause for the filtered query only.
+        conditions: list[str] = []
+        filter_params: list[Any] = []
+        p = 1
+
+        if vote == "up":
+            conditions.append("is_positive = TRUE")
+        elif vote == "down":
+            conditions.append("is_positive = FALSE")
+
+        if search and search.strip():
+            conditions.append(f"(question ILIKE ${p} OR answer ILIKE ${p})")
+            filter_params.append(f"%{search.strip()}%")
+            p += 1
+
+        if session_id and session_id.strip():
+            conditions.append(f"session_id = ${p}")
+            filter_params.append(session_id.strip())
+            p += 1
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        stats_sql = """
+            SELECT
+                COUNT(*)                               AS total,
+                COUNT(*) FILTER (WHERE is_positive)    AS positive,
+                COUNT(*) FILTER (WHERE NOT is_positive) AS negative
+            FROM feedback
+        """
+
+        count_sql  = f"SELECT COUNT(*) FROM feedback {where}"
+
+        items_sql  = f"""
+            SELECT feedback_id, session_id, question, answer, is_positive, created_at
+            FROM   feedback
+            {where}
+            ORDER  BY created_at DESC
+            LIMIT  ${p} OFFSET ${p + 1}
+        """
+        items_params = filter_params + [limit, offset]
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction(isolation="repeatable_read"):
+                stats_row      = await conn.fetchrow(stats_sql)
+                filtered_total = await conn.fetchval(count_sql, *filter_params)
+                rows           = await conn.fetch(items_sql, *items_params)
+
+        return {
+            "total":          int(stats_row["total"]),
+            "positive":       int(stats_row["positive"]),
+            "negative":       int(stats_row["negative"]),
+            "filtered_total": int(filtered_total),
+            "items": [
+                {
+                    "feedback_id": row["feedback_id"],
+                    "session_id":  row["session_id"],
+                    "question":    row["question"],
+                    "answer":      row["answer"],
+                    "is_positive": row["is_positive"],
+                    "created_at":  row["created_at"].isoformat(),
+                }
+                for row in rows
+            ],
+        }
+
+    async def log_feedback(
+        self,
+        session_id: str,
+        question: str,
+        answer: str,
+        is_positive: bool,
+    ) -> None:
+        """
+        Persist a thumbs-up / thumbs-down rating to the feedback table.
+
+        Called from the API layer; runs a single INSERT and releases the
+        connection immediately so the pool is not held during any LLM work.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool is not initialised.")
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO feedback (session_id, question, answer, is_positive)
+                VALUES ($1, $2, $3, $4)
+                """,
+                session_id,
+                question,
+                answer,
+                is_positive,
+            )
+
     def _recent_history(self, history: Optional[list[str]]) -> list[str]:
         """Return a bounded, cleaned list of recent prior user inputs."""
         if not history:

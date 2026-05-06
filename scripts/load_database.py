@@ -8,7 +8,8 @@ load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
 INPUT_CSV      = os.path.join(BASE_DIR, "chunks_with_embeddings.csv")
-INDEX_SQL_FILE = os.path.join(BASE_DIR, "course_advisor_db_indexing.sql")
+INDEX_SQL_FILE    = os.path.join(BASE_DIR, "course_advisor_db_indexing.sql")
+FEEDBACK_SQL_FILE = os.path.join(BASE_DIR, "feedback_test_data.sql")
 
 # ─────────────────────────────────────────────
 #  Connection
@@ -171,6 +172,22 @@ def insert_syllabus_chunks(cur, df: pd.DataFrame, section_map: dict):
 
 
 # ─────────────────────────────────────────────
+#  Feedback Test Data
+# ─────────────────────────────────────────────
+def load_feedback_data(cur):
+    if not os.path.exists(FEEDBACK_SQL_FILE):
+        print(f"Warning: Feedback file {FEEDBACK_SQL_FILE} not found. Skipping.")
+        return
+
+    print(f"\nLoading feedback test data from {os.path.basename(FEEDBACK_SQL_FILE)}...")
+    with open(FEEDBACK_SQL_FILE, 'r') as f:
+        sql = f.read()
+        if sql.strip():
+            cur.execute(sql)
+            print("Successfully loaded feedback test data.")
+
+
+# ─────────────────────────────────────────────
 #  Indexing Logic (Using external SQL file)
 # ─────────────────────────────────────────────
 def apply_indexes(cur):
@@ -300,6 +317,9 @@ def main(dbname, apply_idx=True):
         conn.commit()
 
         insert_syllabus_chunks(cur, df, section_map)
+        conn.commit()
+
+        load_feedback_data(cur)
         conn.commit()
 
         if apply_idx:

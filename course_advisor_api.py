@@ -5,7 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -72,6 +72,13 @@ class AnswerResponse(BaseModel):
     session_id: str
 
 
+class FeedbackRequest(BaseModel):
+    session_id: str
+    question: str
+    answer: str
+    is_positive: bool
+
+
 # Session helpers
 
 def _new_session_id() -> str:
@@ -125,6 +132,46 @@ async def ask(payload: QuestionRequest) -> AnswerResponse:
         session_last_seen[session_id] = time.time()
 
     return AnswerResponse(answer=answer, session_id=session_id)
+
+
+@app.post("/feedback", status_code=204)
+async def submit_feedback(payload: FeedbackRequest) -> None:
+    """Record a thumbs-up or thumbs-down rating for an advisor answer."""
+    if not payload.session_id.strip():
+        raise HTTPException(status_code=422, detail="session_id cannot be empty.")
+    if not payload.question.strip():
+        raise HTTPException(status_code=422, detail="question cannot be empty.")
+    if not payload.answer.strip():
+        raise HTTPException(status_code=422, detail="answer cannot be empty.")
+
+    try:
+        await advisor.log_feedback(
+            payload.session_id,
+            payload.question,
+            payload.answer,
+            payload.is_positive,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/feedback")
+async def list_feedback(
+    vote:       Optional[str] = Query(default=None, description="Filter by vote: 'up' or 'down'"),
+    search:     Optional[str] = Query(default=None, description="Full-text search on question and answer"),
+    session_id: Optional[str] = Query(default=None, description="Filter by session ID (partial match)"),
+    limit:  int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0,  ge=0),
+):
+    """Return feedback rows and aggregate stats for the admin dashboard."""
+    if vote is not None and vote not in ("up", "down"):
+        raise HTTPException(status_code=422, detail="vote must be 'up' or 'down'.")
+    try:
+        return await advisor.get_feedback(
+            vote=vote, search=search, session_id=session_id, limit=limit, offset=offset
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/health")

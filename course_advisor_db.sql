@@ -1,6 +1,7 @@
 -- ─────────────────────────────────────────────
 --  Drop NEW tables (in case of partial runs)
 -- ─────────────────────────────────────────────
+DROP TABLE IF EXISTS feedback;
 DROP TABLE IF EXISTS syllabus_chunk;
 DROP TABLE IF EXISTS section;
 DROP TABLE IF EXISTS course;
@@ -136,4 +137,17 @@ CREATE TABLE syllabus_chunk (
     FOREIGN KEY (section_id)
         REFERENCES section (section_id)
         ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- ─────────────────────────────────────────────
+--  8. FEEDBACK
+-- ─────────────────────────────────────────────
+
+CREATE TABLE feedback (
+    feedback_id  SERIAL       PRIMARY KEY,
+    session_id   TEXT         NOT NULL,
+    question     TEXT         NOT NULL,
+    answer       TEXT         NOT NULL,
+    is_positive  BOOLEAN      NOT NULL,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
