@@ -488,16 +488,6 @@ export default function AdminPage() {
 
         {/* ── Table ── */}
         <Card className="rounded-2xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {loading
-                ? "Loading…"
-                : data
-                ? `${data.filtered_total} result${data.filtered_total !== 1 ? "s" : ""}`
-                : ""}
-            </CardTitle>
-          </CardHeader>
-
           <CardContent className="p-0">
             {error && (
               <p className="px-6 py-8 text-sm text-red-600">Error: {error}</p>
