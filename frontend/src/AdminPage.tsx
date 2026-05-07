@@ -73,6 +73,24 @@ function formatDate(iso: string): string {
   });
 }
 
+function isValidDateTime(value: string): boolean {
+  const match = value.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) return false;
+  const [, mm, dd, yyyy, hh, min, ss] = match.map(Number);
+  if (mm < 1 || mm > 12) return false;
+  if (hh > 23)           return false;
+  if (min > 59)          return false;
+  if (ss > 59)           return false;
+  // Date overflow detection: JS rolls over invalid days (e.g. Feb 30 → Mar 2),
+  // so check that the constructed date's fields match what was passed in.
+  const date = new Date(yyyy, mm - 1, dd);
+  return (
+    date.getFullYear() === yyyy &&
+    date.getMonth()    === mm - 1 &&
+    date.getDate()     === dd
+  );
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({
@@ -262,8 +280,7 @@ export default function AdminPage() {
     if (dateStartDebounceRef.current) clearTimeout(dateStartDebounceRef.current);
     dateStartDebounceRef.current = setTimeout(() => {
       setPage(0);
-      const match = dateStartDraft.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
-      setActiveDateStart(match ? dateStartDraft : "");
+      setActiveDateStart(isValidDateTime(dateStartDraft) ? dateStartDraft : "");
     }, 400);
     return () => { if (dateStartDebounceRef.current) clearTimeout(dateStartDebounceRef.current); };
   }, [dateStartDraft]);
@@ -274,8 +291,7 @@ export default function AdminPage() {
     if (dateEndDebounceRef.current) clearTimeout(dateEndDebounceRef.current);
     dateEndDebounceRef.current = setTimeout(() => {
       setPage(0);
-      const match = dateEndDraft.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
-      setActiveDateEnd(match ? dateEndDraft : "");
+      setActiveDateEnd(isValidDateTime(dateEndDraft) ? dateEndDraft : "");
     }, 400);
     return () => { if (dateEndDebounceRef.current) clearTimeout(dateEndDebounceRef.current); };
   }, [dateEndDraft]);
