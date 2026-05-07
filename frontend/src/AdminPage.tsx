@@ -24,6 +24,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceArea,
 } from "recharts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -52,7 +53,6 @@ interface ChartDataPoint {
 }
 
 type VoteFilter = "all" | "up" | "down";
-type DateMode   = "exact" | "before" | "after";
 
 const PAGE_SIZE = 20;
 
@@ -71,6 +71,24 @@ function formatDate(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function isValidDateTime(value: string): boolean {
+  const match = value.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) return false;
+  const [, mm, dd, yyyy, hh, min, ss] = match.map(Number);
+  if (mm < 1 || mm > 12) return false;
+  if (hh > 23)           return false;
+  if (min > 59)          return false;
+  if (ss > 59)           return false;
+  // Date overflow detection: JS rolls over invalid days (e.g. Feb 30 → Mar 2),
+  // so check that the constructed date's fields match what was passed in.
+  const date = new Date(yyyy, mm - 1, dd);
+  return (
+    date.getFullYear() === yyyy &&
+    date.getMonth()    === mm - 1 &&
+    date.getDate()     === dd
+  );
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -177,11 +195,51 @@ export default function AdminPage() {
   const [activeSearch, setActiveSearch] = useState("");
   const [sessionDraft, setSessionDraft] = useState("");
   const [activeSession, setActiveSession] = useState("");
-  const [dateDraft, setDateDraft]     = useState("");          // MM-DD-YYYY as typed
-  const [activeDate, setActiveDate]   = useState("");          // YYYY-MM-DD sent to API
-  const [dateMode, setDateMode]       = useState<DateMode>("exact");
+  const [dateStartDraft, setDateStartDraft] = useState("");
+  const [activeDateStart, setActiveDateStart] = useState("");
+  const [dateEndDraft, setDateEndDraft] = useState("");
+  const [activeDateEnd, setActiveDateEnd] = useState("");
   const [page, setPage]           = useState(0);
   const debounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ─── Chart zoom state ───────────────────────────────────────────────────────
+  const [refAreaLeft,  setRefAreaLeft]  = useState<string>("");
+  const [refAreaRight, setRefAreaRight] = useState<string>("");
+  const [isSelecting,  setIsSelecting]  = useState(false);
+  const [zoomedData,   setZoomedData]   = useState<ChartDataPoint[]>([]);
+
+  const displayData = zoomedData.length ? zoomedData : chartData;
+
+  function handleChartMouseDown(e: any) {
+    if (!e?.activeLabel) return;
+    setRefAreaLeft(e.activeLabel);
+    setRefAreaRight(e.activeLabel);
+    setIsSelecting(true);
+  }
+
+  function handleChartMouseMove(e: any) {
+    if (!isSelecting || !e?.activeLabel) return;
+    setRefAreaRight(e.activeLabel);
+  }
+
+  function handleChartMouseUp() {
+    if (!isSelecting) return;
+    setIsSelecting(false);
+    if (!refAreaLeft || !refAreaRight || refAreaLeft === refAreaRight) {
+      setRefAreaLeft(""); setRefAreaRight("");
+      return;
+    }
+    const [l, r] = [refAreaLeft, refAreaRight].sort();
+    const slice = chartData.filter((d) => d.day >= l && d.day <= r);
+    if (slice.length > 1) setZoomedData(slice);
+    setRefAreaLeft(""); setRefAreaRight("");
+  }
+
+  function resetZoom() {
+    setZoomedData([]);
+    setRefAreaLeft("");
+    setRefAreaRight("");
+  }
 
   // Fetch global chart data once on mount.
   useEffect(() => {
@@ -216,25 +274,32 @@ export default function AdminPage() {
     };
   }, [sessionDraft]);
 
-  // Debounce date filter
-  const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Debounce date start filter
+  const dateStartDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
-    dateDebounceRef.current = setTimeout(() => {
+    if (dateStartDebounceRef.current) clearTimeout(dateStartDebounceRef.current);
+    dateStartDebounceRef.current = setTimeout(() => {
       setPage(0);
-      // Convert MM-DD-YYYY → YYYY-MM-DD for the API, or clear if invalid/empty.
-      const match = dateDraft.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-      setActiveDate(match ? `${match[3]}-${match[1]}-${match[2]}` : "");
+      setActiveDateStart(isValidDateTime(dateStartDraft) ? dateStartDraft : "");
     }, 400);
-    return () => {
-      if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
-    };
-  }, [dateDraft]);
+    return () => { if (dateStartDebounceRef.current) clearTimeout(dateStartDebounceRef.current); };
+  }, [dateStartDraft]);
 
-  // Reset page when filters change.
+  // Debounce date end filter
+  const dateEndDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (dateEndDebounceRef.current) clearTimeout(dateEndDebounceRef.current);
+    dateEndDebounceRef.current = setTimeout(() => {
+      setPage(0);
+      setActiveDateEnd(isValidDateTime(dateEndDraft) ? dateEndDraft : "");
+    }, 400);
+    return () => { if (dateEndDebounceRef.current) clearTimeout(dateEndDebounceRef.current); };
+  }, [dateEndDraft]);
+
+  // Reset page when vote filter changes.
   useEffect(() => {
     setPage(0);
-  }, [voteFilter, dateMode]);
+  }, [voteFilter]);
 
   // Fetch whenever filters or page changes.
   useEffect(() => {
@@ -246,13 +311,11 @@ export default function AdminPage() {
       limit:  String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
     });
-    if (voteFilter !== "all")  params.set("vote", voteFilter);
-    if (activeSearch.trim())   params.set("search", activeSearch.trim());
-    if (activeSession.trim())  params.set("session_id", activeSession.trim());
-    if (activeDate.trim()) {
-      params.set("date_filter", activeDate.trim());
-      params.set("date_mode", dateMode);
-    }
+    if (voteFilter !== "all")       params.set("vote", voteFilter);
+    if (activeSearch.trim())        params.set("search", activeSearch.trim());
+    if (activeSession.trim())       params.set("session_id", activeSession.trim());
+    if (activeDateStart.trim())     params.set("date_start", activeDateStart.trim());
+    if (activeDateEnd.trim())       params.set("date_end", activeDateEnd.trim());
 
     fetch(`/feedback?${params.toString()}`)
       .then((res) => {
@@ -264,7 +327,7 @@ export default function AdminPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [voteFilter, activeSearch, activeSession, activeDate, dateMode, page]);
+  }, [voteFilter, activeSearch, activeSession, activeDateStart, activeDateEnd, page]);
 
   const totalPages = data ? Math.ceil(data.filtered_total / PAGE_SIZE) : 0;
 
@@ -292,14 +355,31 @@ export default function AdminPage() {
         {/* ── Trend chart ── */}
         {chartData.length > 0 && (
           <Card className="rounded-2xl">
-            <CardHeader className="pb-0">
+            <CardHeader className="pb-0 flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Daily Positive Feedback Ratio
               </CardTitle>
+              {zoomedData.length > 0 && (
+                <button
+                  type="button"
+                  onClick={resetZoom}
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+                >
+                  <X className="h-3 w-3" /> Reset zoom
+                </button>
+              )}
             </CardHeader>
             <CardContent className="pt-4 pb-2">
-              <ResponsiveContainer width="100%" height={180}>
-                <AreaChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart
+                  data={displayData}
+                  margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+                  onMouseDown={handleChartMouseDown}
+                  onMouseMove={handleChartMouseMove}
+                  onMouseUp={handleChartMouseUp}
+                  onMouseLeave={() => { if (isSelecting) handleChartMouseUp(); }}
+                  style={{ cursor: "crosshair", userSelect: "none" }}
+                >
                   <defs>
                     <linearGradient id="ratioGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%"  stopColor="hsl(221 83% 53%)" stopOpacity={0.3} />
@@ -310,7 +390,7 @@ export default function AdminPage() {
                   <XAxis
                     dataKey="day"
                     tick={{ fontSize: 11 }}
-                    ticks={[chartData[0].day, chartData[chartData.length - 1].day]}
+                    ticks={[displayData[0].day, displayData[displayData.length - 1].day]}
                     tickFormatter={(v: string) => {
                       const [y, m, d] = v.split("-").map(Number);
                       return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -346,7 +426,17 @@ export default function AdminPage() {
                     fill="url(#ratioGradient)"
                     dot={false}
                     activeDot={{ r: 4, fill: "hsl(221 83% 53%)" }}
+                    isAnimationActive={false}
                   />
+                  {refAreaLeft && refAreaRight && (
+                    <ReferenceArea
+                      x1={refAreaLeft}
+                      x2={refAreaRight}
+                      strokeOpacity={0.3}
+                      fill="hsl(221 83% 53%)"
+                      fillOpacity={0.15}
+                    />
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             </CardContent>
@@ -414,48 +504,67 @@ export default function AdminPage() {
               ))}
             </div>
 
-            {/* Date filter row */}
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <div className="relative sm:w-48">
-                <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={dateDraft}
-                  onChange={(e) => setDateDraft(e.target.value)}
-                  placeholder="MM-DD-YYYY"
-                  maxLength={10}
-                  className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
-                    dateDraft && !activeDate ? "border-destructive ring-1 ring-destructive/40" : ""
-                  }`}
-                />
-                {dateDraft && (
-                  <button
-                    type="button"
-                    onClick={() => { setDateDraft(""); setActiveDate(""); }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    aria-label="Clear date filter"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+            {/* Date range filter row */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              {/* Start datetime */}
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground pl-1">From</span>
+                <div className="relative sm:w-56">
+                  <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={dateStartDraft}
+                    onChange={(e) => setDateStartDraft(e.target.value)}
+                    placeholder="MM-DD-YYYY HH:MM:SS"
+                    maxLength={19}
+                    className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
+                      dateStartDraft && !activeDateStart ? "border-destructive ring-1 ring-destructive/40" : ""
+                    }`}
+                  />
+                  {dateStartDraft && (
+                    <button
+                      type="button"
+                      onClick={() => { setDateStartDraft(""); setActiveDateStart(""); }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="Clear start date"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {dateStartDraft && !activeDateStart && (
+                  <span className="text-xs text-destructive pl-1">Use MM-DD-YYYY HH:MM:SS</span>
                 )}
               </div>
-              <div className="flex gap-1.5">
-                {(["before", "exact", "after"] as DateMode[]).map((m) => (
-                  <Button
-                    key={m}
-                    type="button"
-                    variant={dateMode === m ? "default" : "outline"}
-                    size="sm"
-                    disabled={!activeDate}
-                    className="rounded-xl text-xs px-3"
-                    onClick={() => setDateMode(m)}
-                  >
-                    {m === "exact" ? "On date" : m === "before" ? "Before" : "After"}
-                  </Button>
-                ))}
+
+              {/* End datetime */}
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground pl-1">To</span>
+                <div className="relative sm:w-56">
+                  <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={dateEndDraft}
+                    onChange={(e) => setDateEndDraft(e.target.value)}
+                    placeholder="MM-DD-YYYY HH:MM:SS"
+                    maxLength={19}
+                    className={`h-9 rounded-xl pl-9 pr-8 font-mono text-sm ${
+                      dateEndDraft && !activeDateEnd ? "border-destructive ring-1 ring-destructive/40" : ""
+                    }`}
+                  />
+                  {dateEndDraft && (
+                    <button
+                      type="button"
+                      onClick={() => { setDateEndDraft(""); setActiveDateEnd(""); }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="Clear end date"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {dateEndDraft && !activeDateEnd && (
+                  <span className="text-xs text-destructive pl-1">Use MM-DD-YYYY HH:MM:SS</span>
+                )}
               </div>
-              {dateDraft && !activeDate && (
-                <span className="text-xs text-destructive">Enter a valid date as MM-DD-YYYY</span>
-              )}
             </div>
           </CardContent>
         </Card>
