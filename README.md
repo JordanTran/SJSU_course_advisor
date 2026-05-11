@@ -324,6 +324,9 @@ pytest tests/course_advisor_test_db_validation.py -v -s
 
 Requires `scripts/chunks_with_embeddings.csv` to be present (used as the ground-truth source).
 
+<img width="1747" height="171" alt="image" src="https://github.com/user-attachments/assets/2dff6c0e-2475-4f56-99c2-196c1b50f09b" />
+
+
 ### 3. Concurrency / load test
 
 Stress-tests the live API with three scenarios — burst, ramp, and sustain — and prints a latency/error summary table:
@@ -337,6 +340,8 @@ python tests/concurrency_test.py
 
 Configuration constants at the top of the file control concurrency levels (`BURST_N`, `RAMP_MAX`, `SUSTAIN_RPS`, `SUSTAIN_DUR`) and which scenarios to skip (`SKIP_BURST`, `SKIP_RAMP`, `SKIP_SUSTAIN`). The API server must be running before executing this test.
 
+<img width="1462" height="570" alt="image" src="https://github.com/user-attachments/assets/c751fddb-ee8f-4e21-a69c-bf6e40f36f75" />c
+
 ### 4. Indexing benchmark
 
 Measures query execution time and I/O block counts with and without vector indexes using `EXPLAIN (ANALYZE, BUFFERS)`:
@@ -346,6 +351,9 @@ python tests/indexing_benchmark.py
 ```
 
 Prints a Rich table comparing base vs. indexed query performance across multiple scenarios defined in `tests/indexing_tests.sql`.
+
+<img width="1230" height="671" alt="image" src="https://github.com/user-attachments/assets/f0d36f82-30ef-4e64-8f71-91af9ff83ffd" />
+
 
 ---
 
