@@ -334,6 +334,17 @@ pytest tests/course_advisor_test_db_validation.py -v -s
 
 Requires `scripts/chunks_with_embeddings.csv` to be present (used as the ground-truth source).
 
+| Phase | Tests |
+|---|---|
+| 1 · Connection & Schema | DB reachable (`SELECT 1`), all 7 expected tables present |
+| 2 · Count validations | Row counts match CSV for colleges, departments, subjects, courses, instructors, sections, and chunks |
+| 3 · Set comparisons | Exact subject-code and instructor-name sets match CSV (no extras or missing in either direction) |
+| 4 · Unique constraints | No duplicate subject codes, instructor names, or section composite keys |
+| 5 · Referential integrity | No orphaned subjects (missing department), sections (missing course or instructor), or chunks (missing section) |
+| 6 · Data quality | No null/empty course titles or instructor names; units positive; year in 2000–2100 range; delivery values in allowed set |
+| 7 · Embedding quality | No null embeddings; all vectors share the same dimensionality; no sections with zero chunks |
+| 8 · Grand finale | Full row-by-row, column-by-column `DataFrame` comparison of DB against source CSV |
+
 <img width="1747" height="171" alt="image" src="https://github.com/user-attachments/assets/2dff6c0e-2475-4f56-99c2-196c1b50f09b" />
 
 
