@@ -17,6 +17,12 @@ An AI-powered academic advisor chatbot for San José State University students. 
 9. [Frontend](#frontend)
 10. [Running the Application](#running-the-application)
 11. [Testing](#testing)
+    - [1. Agent smoke test](#1-agent-smoke-test)
+    - [2. Database validation suite](#2-database-validation-suite)
+    - [3. Concurrency / load test](#3-concurrency--load-test)
+    - [4. Indexing benchmark](#4-indexing-benchmark)
+    - [5. Key SQL queries test suite](#5-key-sql-queries-test-suite)
+    - [6. Transaction isolation test suite](#6-transaction-isolation-test-suite)
 12. [Backup and Recovery](#backup-and-recovery)
 13. [API Reference](#api-reference)
 
@@ -114,7 +120,9 @@ SJSU_course_advisor/
     ├── course_advisor_test_db_validation.py # pytest suite: schema, data, embeddings
     ├── concurrency_test.py                 # Async load test: burst, ramp, sustain
     ├── indexing_benchmark.py               # EXPLAIN-based index speedup benchmark
-    └── indexing_tests.sql                  # SQL queries used by the benchmark
+    ├── indexing_tests.sql                  # SQL queries used by the benchmark
+    ├── key_queries_test.py                 # pytest suite: vector search & feedback SQL queries
+    └── transactions_test.py                # pytest suite: transaction isolation & rollback behaviour
 ```
 
 ---
@@ -140,6 +148,26 @@ GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY_HERE
 ```
 
 `GOOGLE_API_KEY` is used both by the backend agent (Gemini LLM + embeddings) and by the data-pipeline scripts. Never commit this file.
+
+---
+
+## Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+Key packages:
+
+| Package | Purpose |
+|---|---|
+| `fastapi`, `uvicorn` | ASGI web framework and server |
+| `asyncpg`, `pgvector` | Async PostgreSQL driver with vector type support |
+| `google-genai` | Google Gemini API (embeddings + LLM) |
+| `langchain-google-genai`, `langgraph` | LangChain/LangGraph for the ReWOO agent graph |
+| `pydantic` | Request/response schema validation |
+| `python-dotenv` | `.env` file loading |
+| `beautifulsoup4`, `playwright`, `pandas` | Data pipeline only |
 
 ---
 
@@ -222,24 +250,6 @@ This populates all tables (`college`, `department`, `subject`, `course`, `sectio
 ---
 
 ## Python Backend
-
-### Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Key packages:
-
-| Package | Purpose |
-|---|---|
-| `fastapi`, `uvicorn` | ASGI web framework and server |
-| `asyncpg`, `pgvector` | Async PostgreSQL driver with vector type support |
-| `google-genai` | Google Gemini API (embeddings + LLM) |
-| `langchain-google-genai`, `langgraph` | LangChain/LangGraph for the ReWOO agent graph |
-| `pydantic` | Request/response schema validation |
-| `python-dotenv` | `.env` file loading |
-| `beautifulsoup4`, `playwright`, `pandas` | Data pipeline only |
 
 ### Start the backend server
 
@@ -324,8 +334,18 @@ pytest tests/course_advisor_test_db_validation.py -v -s
 
 Requires `scripts/chunks_with_embeddings.csv` to be present (used as the ground-truth source).
 
-<img width="1747" height="171" alt="image" src="https://github.com/user-attachments/assets/2dff6c0e-2475-4f56-99c2-196c1b50f09b" />
+| Phase | Tests |
+|---|---|
+| 1 · Connection & Schema | DB reachable (`SELECT 1`), all 7 expected tables present |
+| 2 · Count validations | Row counts match CSV for colleges, departments, subjects, courses, instructors, sections, and chunks |
+| 3 · Set comparisons | Exact subject-code and instructor-name sets match CSV (no extras or missing in either direction) |
+| 4 · Unique constraints | No duplicate subject codes, instructor names, or section composite keys |
+| 5 · Referential integrity | No orphaned subjects (missing department), sections (missing course or instructor), or chunks (missing section) |
+| 6 · Data quality | No null/empty course titles or instructor names; units positive; year in 2000–2100 range; delivery values in allowed set |
+| 7 · Embedding quality | No null embeddings; all vectors share the same dimensionality; no sections with zero chunks |
+| 8 · Grand finale | Full row-by-row, column-by-column `DataFrame` comparison of DB against source CSV |
 
+<img width="1738" height="742" alt="image" src="https://github.com/user-attachments/assets/4b433a11-ea37-4a4b-b28d-6635536b576e" />
 
 ### 3. Concurrency / load test
 
@@ -354,6 +374,52 @@ Prints a Rich table comparing base vs. indexed query performance across multiple
 
 <img width="1230" height="671" alt="image" src="https://github.com/user-attachments/assets/f0d36f82-30ef-4e64-8f71-91af9ff83ffd" />
 
+
+### 5. Key SQL queries test suite
+
+A pytest suite that validates every SQL query used by the course advisor against the live `course_advisor_test` database — vector search (pure and CTE-filtered), feedback INSERT, stats/count/items queries, and the chart aggregation. Tests seed their own data via `seed_chunk` and use a per-test rollback fixture so the shared database is never permanently modified.
+
+Requires `pgvector` and `psycopg2-binary` (both in `requirements.txt`). The test database must have the schema applied and the syllabus data loaded before running.
+
+```bash
+pytest tests/key_queries_test.py -v
+```
+
+Covers:
+
+| Group | Tests |
+|---|---|
+| Pure vector search | closest result, LIMIT respected, all metadata columns present |
+| Filtered vector search (CTE) | subject filter, subject with no match, instructor ILIKE, year + session |
+| Feedback INSERT | all fields persisted correctly |
+| Feedback stats | total / positive / negative counts, empty-table zeros |
+| Feedback items | newest-first ordering, ILIKE search, pagination |
+| Feedback chart | daily grouping, oldest-first ordering, empty-table no rows |
+
+<img width="1735" height="429" alt="image" src="https://github.com/user-attachments/assets/898447ce-ae9f-4d6d-a546-427841992172" />
+
+
+### 6. Transaction isolation test suite
+
+A pytest suite that verifies the `REPEATABLE READ` transaction used by `get_feedback`, ensuring that stats, count, and item queries all observe a consistent snapshot even when concurrent writes are committed mid-transaction.
+
+```bash
+pytest tests/transactions_test.py -v
+```
+
+Each test runs against the `course_advisor_test` database. The fixture commits a `DELETE FROM feedback` before each test (using `autocommit=True`) so that concurrent connections opened inside the tests also see a clean baseline — an uncommitted delete would be invisible to those connections and leave the 100 k seed rows in view.
+
+Covers:
+
+| Test | What it verifies |
+|---|---|
+| `test_repeatable_read_isolates_concurrent_insert` | A committed insert on a second connection is invisible inside an open `REPEATABLE READ` transaction |
+| `test_stats_reflect_full_table_not_filter` | Stats query counts all rows; a filtered sub-query operates independently in the same snapshot |
+| `test_rollback_on_error` | An exception mid-transaction rolls back all writes in that block |
+| `test_committed_insert_is_visible` | A committed insert is immediately visible to a subsequent query on the same connection |
+| `test_pagination_within_transaction` | `LIMIT`/`OFFSET` pages are non-overlapping and stable within a single `REPEATABLE READ` transaction |
+
+<img width="1726" height="215" alt="image" src="https://github.com/user-attachments/assets/645246c6-e986-4c92-869d-27c4cfba99f1" />
 
 ---
 
