@@ -345,8 +345,7 @@ Requires `scripts/chunks_with_embeddings.csv` to be present (used as the ground-
 | 7 · Embedding quality | No null embeddings; all vectors share the same dimensionality; no sections with zero chunks |
 | 8 · Grand finale | Full row-by-row, column-by-column `DataFrame` comparison of DB against source CSV |
 
-<img width="1747" height="171" alt="image" src="https://github.com/user-attachments/assets/2dff6c0e-2475-4f56-99c2-196c1b50f09b" />
-
+<img width="1738" height="742" alt="image" src="https://github.com/user-attachments/assets/4b433a11-ea37-4a4b-b28d-6635536b576e" />
 
 ### 3. Concurrency / load test
 
@@ -397,6 +396,9 @@ Covers:
 | Feedback items | newest-first ordering, ILIKE search, pagination |
 | Feedback chart | daily grouping, oldest-first ordering, empty-table no rows |
 
+<img width="1735" height="429" alt="image" src="https://github.com/user-attachments/assets/898447ce-ae9f-4d6d-a546-427841992172" />
+
+
 ### 6. Transaction isolation test suite
 
 A pytest suite that verifies the `REPEATABLE READ` transaction used by `get_feedback`, ensuring that stats, count, and item queries all observe a consistent snapshot even when concurrent writes are committed mid-transaction.
@@ -416,6 +418,8 @@ Covers:
 | `test_rollback_on_error` | An exception mid-transaction rolls back all writes in that block |
 | `test_committed_insert_is_visible` | A committed insert is immediately visible to a subsequent query on the same connection |
 | `test_pagination_within_transaction` | `LIMIT`/`OFFSET` pages are non-overlapping and stable within a single `REPEATABLE READ` transaction |
+
+<img width="1726" height="215" alt="image" src="https://github.com/user-attachments/assets/645246c6-e986-4c92-869d-27c4cfba99f1" />
 
 ---
 
