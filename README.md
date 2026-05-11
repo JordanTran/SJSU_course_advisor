@@ -168,14 +168,6 @@ college → department → subject → course → section → syllabus_chunk
 
 `syllabus_chunk` stores a `vector(768)` column backed by pgvector.
 
-### 2. Apply vector indexes (optional but recommended for production)
-
-```bash
-psql -U postgres -d course_advisor -f scripts/course_advisor_db_indexing.sql
-```
-
-This creates IVFFlat / HNSW indexes that dramatically speed up approximate nearest-neighbour search.
-
 ---
 
 ## Data Pipeline
